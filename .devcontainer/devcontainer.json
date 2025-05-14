@@ -2,8 +2,8 @@
     "name": "Catapulta Indexer Dev Container",
     "image": "oven/bun",
     "features": {
+	"ghcr.io/devcontainers/features/rust:1": {},
 	"ghcr.io/devcontainers/features/common-utils:2": {},
-    	"ghcr.io/devcontainers/features/github-cli:1": {},
     	"ghcr.io/devcontainers/features/docker-outside-of-docker:1": {
       		"moby": false,
       		"dockerDashComposeVersion": "v2"
@@ -21,6 +21,8 @@
         }
     },
     "forwardPorts": [
-    	3000
-    ]
+    	3000,
+        3001
+    ],
+    "postCreateCommand": "bash -i -c 'curl -L https://rindexer.xyz/install.sh | bash'"
 }
