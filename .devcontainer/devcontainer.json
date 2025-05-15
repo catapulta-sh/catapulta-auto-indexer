@@ -17,6 +17,7 @@
 			}
 		}
 	},
-	"forwardPorts": [3000, 3001],
-	"postCreateCommand": "bash -i -c 'curl -L https://rindexer.xyz/install.sh | bash'"
+	"forwardPorts": [3000, 3001], 
+	"postCreateCommand": "bash -i -c 'curl -L https://rindexer.xyz/install.sh | bash' && bash -i -c 'curl -L https://foundry.paradigm.xyz | bash' && ~/.foundry/bin/foundryup && echo export PATH=\\\"$HOME/.foundry/bin:$PATH\\\" >> $HOME/.bashrc"
+	
 }
