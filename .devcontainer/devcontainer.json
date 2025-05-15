@@ -1,6 +1,10 @@
 {
 	"name": "Catapulta Indexer Dev Container",
-	"image": "oven/bun",
+	"dockerComposeFile": [
+		"../docker-compose.yml"
+	],
+	"service": "app",
+	"workspaceFolder": "/workspace",
 	"features": {
 		"ghcr.io/devcontainers/features/rust:1": {},
 		"ghcr.io/devcontainers/features/common-utils:2": {},
@@ -11,12 +15,18 @@
 	},
 	"customizations": {
 		"vscode": {
-			"extensions": ["JuanBlanco.solidity", "oven.bun-vscode"],
+			"extensions": [
+				"JuanBlanco.solidity",
+				"oven.bun-vscode"
+			],
 			"settings": {
 				"solidity.formatter": "forge"
 			}
 		}
 	},
-	"forwardPorts": [3000, 3001],
+	"forwardPorts": [
+		3000,
+		3001
+	],
 	"postCreateCommand": "bash -i -c 'curl -L https://rindexer.xyz/install.sh | bash'"
 }
