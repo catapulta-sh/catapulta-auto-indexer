@@ -40,3 +40,8 @@ yarn-error.log*
 **/*.log
 package-lock.json
 **/*.bun
+
+.rindexer
+generated_csv/**/*.txt
+.env
+abis/*.json
