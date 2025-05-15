@@ -17,7 +17,7 @@ code catapulta-auto-indexer
 5. Once it loads, open a Terminal and run the following commands to check if the environment is working:
 ```
 bun -v
-rustc --v
+rustc --V
 rindexer -V
 ```
 
