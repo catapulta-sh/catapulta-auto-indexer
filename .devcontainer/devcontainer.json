@@ -6,7 +6,6 @@
 	"service": "app",
 	"workspaceFolder": "/workspace",
 	"features": {
-		"ghcr.io/devcontainers/features/rust:1": {},
 		"ghcr.io/devcontainers/features/common-utils:2": {},
 		"ghcr.io/devcontainers/features/docker-outside-of-docker:1": {
 			"moby": false,
@@ -28,5 +27,5 @@
 		3000,
 		3001
 	],
-	"postCreateCommand": "bash -i -c 'curl -L https://rindexer.xyz/install.sh | bash'"
+	"postCreateCommand": "bash -i -c 'curl --proto \"=https\" --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y && source \"$HOME/.cargo/env\" && curl -L https://rindexer.xyz/install.sh | bash'"
 }
