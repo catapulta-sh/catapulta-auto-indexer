@@ -1,7 +1,0 @@
-contracts:
-  - contract_name: SablierLockup
-    report_id: "1"
-    network_name: ethereum
-    contract_address: "0x7C01AA3783577E15fD7e272443D44B92d5b21056"
-    abi: ./abis/SablierLockup.json
-    deployment_block_number: "21770437"
