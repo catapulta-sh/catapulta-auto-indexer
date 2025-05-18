@@ -8,9 +8,11 @@
 	},
 	"dependencies": {
 		"@biomejs/biome": "^1.9.4",
-		"elysia": "latest"
+		"elysia": "latest",
+		"pg": "^8.16.0"
 	},
 	"devDependencies": {
+		"@types/pg": "^8.15.2",
 		"bun-types": "latest"
 	},
 	"module": "src/index.js"
