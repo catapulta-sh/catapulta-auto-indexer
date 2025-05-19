@@ -8,10 +8,13 @@
 	},
 	"dependencies": {
 		"@biomejs/biome": "^1.9.4",
-		"elysia": "latest"
+		"elysia": "latest",
+		"ethers": "^6.14.1",
+		"viem": "^2.29.4"
 	},
 	"devDependencies": {
-		"bun-types": "latest"
+		"@types/node": "^22.15.19",
+		"bun-types": "^1.2.13"
 	},
 	"module": "src/index.js"
 }
