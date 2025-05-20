@@ -15,7 +15,7 @@ services:
       - .env
 
   app:
-    image: oven/bun
+    build: .
     volumes:
       - ./:/workspace
     working_dir: /workspace

@@ -1,8 +1,6 @@
 {
 	"name": "Catapulta Indexer Dev Container",
-	"dockerComposeFile": [
-		"../docker-compose.yml"
-	],
+	"dockerComposeFile": ["../docker-compose.yml"],
 	"service": "app",
 	"workspaceFolder": "/workspace",
 	"features": {
@@ -14,18 +12,11 @@
 	},
 	"customizations": {
 		"vscode": {
-			"extensions": [
-				"JuanBlanco.solidity",
-				"oven.bun-vscode"
-			],
+			"extensions": ["JuanBlanco.solidity", "oven.bun-vscode"],
 			"settings": {
 				"solidity.formatter": "forge"
 			}
 		}
 	},
-	"forwardPorts": [
-		3000,
-		3001
-	],
-	"postCreateCommand": "bash -i -c 'curl --proto \"=https\" --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y && source \"$HOME/.cargo/env\" && curl -L https://rindexer.xyz/install.sh | bash'"
+	"forwardPorts": [3000, 3001]
 }
