@@ -97,6 +97,25 @@ app.get('/events', async ({ query }: { query: {
   }
 )
 
+// Proxy a graphql
+app.post('/graphql', async ({ request }) => {
+  const body = await request.json()
+
+  if (!body?.query) {
+    return { error: 'The field "query" is required.' }
+  }
+
+  const response = await fetch('http://localhost:3001/graphql', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json'
+    },
+    body: JSON.stringify(body)
+  })
+
+  return await response.json()
+})
+
 
 // Ruta base
 app.get('/', () => 'Hello Elysia')
