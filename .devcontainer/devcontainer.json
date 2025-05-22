@@ -1,6 +1,6 @@
 {
 	"name": "Catapulta Indexer Dev Container",
-	"dockerComposeFile": ["../docker-compose.yml"],
+	"dockerComposeFile": ["./docker-compose-dev.yml"],
 	"service": "app",
 	"workspaceFolder": "/workspace",
 	"features": {
@@ -18,5 +18,6 @@
 			}
 		}
 	},
-	"forwardPorts": [3000, 3001]
+	"forwardPorts": [3000, 3001],
+	"postCreateCommand": "echo 'alias rindexer=/app/rindexer' >> ~/.bashrc"
 }

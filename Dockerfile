@@ -1,31 +1,11 @@
-FROM oven/bun:latest
+FROM ghcr.io/joshstevens19/rindexer-bundled:latest
 
-# Update packages
-RUN apt-get update
+RUN apt-get update \
+    && apt-get install -y unzip \
+    && apt-get autoremove --yes \
+    && apt-get clean --yes \
+    && rm -rf /var/lib/apt/lists/*
 
-# Get Ubuntu packages
-RUN apt-get install -y build-essential curl git unzip procps
+RUN curl -fsSL https://bun.sh/install | bash
 
-# Get Rust
-RUN curl https://sh.rustup.rs -sSf | bash -s -- -y
-ENV PATH="/root/.cargo/bin:${PATH}"
-
-
-# Install foundry
-RUN curl -L https://foundry.paradigm.xyz | bash
-ENV PATH="/root/.foundry/bin:${PATH}"
-RUN foundryup
-
-# Install rindexer
-RUN mkdir -p /root/.rindexer
-
-RUN curl -L https://rindexer.xyz/releases/resources.zip -o /root/.rindexer/resources.zip && \
-    mkdir -p /root/.rindexer/resources && \
-    unzip -o /root/.rindexer/resources.zip -d /root/.rindexer/resources
-
-# Download, modify, and run the install script
-RUN curl -L https://rindexer.xyz/install.sh -o rindexer_install.sh && \
-    chmod +x rindexer_install.sh && \
-    sed -i 's/curl -sSf -L "$RESOURCES_URL" -o "$RINDEXER_DIR\/resources.zip" & spinner "Downloading resources..."/echo "Skip downloading resources - already downloaded"/' rindexer_install.sh && \
-    bash -x ./rindexer_install.sh && \
-    rm rindexer_install.sh
+ENTRYPOINT []
