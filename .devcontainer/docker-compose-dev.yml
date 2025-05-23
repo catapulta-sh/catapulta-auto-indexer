@@ -12,18 +12,15 @@ services:
     ports:
       - 5440:5432
     env_file:
-      - .env
+      - ../.env
 
   app:
-    build: .
+    build: ../.
     volumes:
-      - ./:/workspace
+      - ../:/workspace
     working_dir: /workspace
-    ports:
-      - 3001:3001
-      - 3000:3000
     depends_on:
       - postgresql
-    command: bash -c "bun run dev"
+    command: sleep infinity
     env_file:
-      - .env
+      - ../.env
