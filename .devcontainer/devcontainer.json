@@ -27,6 +27,5 @@
 		3000,
 		3001
 	], 
-	"postCreateCommand": "bash -i -c 'curl --proto \"=https\" --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y && source \"$HOME/.cargo/env\" && curl -L https://rindexer.xyz/install.sh | bash' && bash -i -c 'curl -L https://foundry.paradigm.xyz | bash' && ~/.foundry/bin/foundryup && echo export PATH=\\\"$HOME/.foundry/bin:$PATH\\\" >> $HOME/.bashrc"
-	
+	"postCreateCommand": "bash -i -c 'curl -L https://foundry.paradigm.xyz | bash && source /root/.bashrc && foundryup && export PATH=\"$PATH:$HOME/.foundry/bin\" && echo \"export PATH=$PATH:$HOME/.foundry/bin\" >> ~/.bashrc && source ~/.bashrc && curl --proto \"=https\" --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y && source \"$HOME/.cargo/env\" && curl -L https://rindexer.xyz/install.sh | bash'"
 }

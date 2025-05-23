@@ -1,7 +1,7 @@
 import { ethers } from "ethers";
 import { beforeAll, afterAll, describe, test, expect } from "bun:test";
-import { startAnvil, stopAnvil } from "../e2e/anvil";
-import { deployMyContract, getContractInstance } from "../e2e/deploy";
+import { startAnvil, stopAnvil } from "../e2e/foundry/anvil";
+import { deployMyContract, getContractInstance } from "../e2e/foundry/deploy";
 let contractAddress: string;
 
 beforeAll(async () => {
