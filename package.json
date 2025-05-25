@@ -9,8 +9,10 @@
 	"dependencies": {
 		"@biomejs/biome": "^1.9.4",
 		"@types/fs-extra": "^11.0.4",
+		"@types/js-yaml": "^4.0.9",
 		"elysia": "latest",
 		"fs-extra": "^11.3.0",
+		"js-yaml": "^4.1.0",
 		"pg": "^8.16.0"
 	},
 	"devDependencies": {
