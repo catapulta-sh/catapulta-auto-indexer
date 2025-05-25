@@ -8,17 +8,21 @@ import { type Subprocess } from "bun";
 let globalProcess: Subprocess | undefined;
 
 const startRindexerProcess = () => {
-	console.log("Spawning rindexer process: rindexer start indexer");
+	console.log("Spawning rindexer process: rindexer start all");
 	const proc = Bun.spawn({
 		cmd: ["/app/rindexer", "start", "all"],
-		stdout: "inherit", // Pipe stdout to the current process
-		stderr: "inherit", // Pipe stderr to the current process
+		stdout: "inherit",
+		stderr: "inherit",
 		onExit: (proc, exitCode, signalCode, error) => {
 			console.log(
 				`Rindexer process exited with code: ${exitCode}, signal: ${signalCode}`,
 			);
 			if (error) {
 				console.error("Rindexer process error on exit:", error);
+			}
+			// Clean up the global reference when process exits
+			if (globalProcess === proc) {
+				globalProcess = undefined;
 			}
 		},
 	});
@@ -151,40 +155,132 @@ app.post("/graphql", async ({ request }) => {
 	return await response.json();
 });
 
+// Types for better type safety
+interface AddContractRequest {
+	name: string;
+	network: string;
+	address: string;
+	start_block: string;
+	abi: Record<string, any> | string;
+	id: string;
+}
+
+interface ApiResponse {
+	success: boolean;
+	message?: string;
+	error?: string;
+}
+
+interface RindexerContract {
+	name: string;
+	details: Array<{
+		network: string;
+		address: string;
+		start_block: string;
+	}>;
+	abi: string;
+}
+
+interface RindexerConfig {
+	contracts?: RindexerContract[];
+	[key: string]: any;
+}
+
+// Helper functions for better separation of concerns
+const validateAddContractRequest = (
+	body: Partial<AddContractRequest>,
+): string | null => {
+	const requiredFields = [
+		"name",
+		"network",
+		"address",
+		"start_block",
+		"abi",
+		"id",
+	] as const;
+	const missingFields = requiredFields.filter((field) => !body[field]);
+
+	if (missingFields.length > 0) {
+		return `Missing required fields: ${missingFields.join(", ")}`;
+	}
+	return null;
+};
+
+const parseAbi = (abi: Record<string, any> | string): Record<string, any> => {
+	return typeof abi === "string" ? JSON.parse(abi) : abi;
+};
+
+const restartRindexerProcess = async (): Promise<void> => {
+	if (globalProcess) {
+		console.log("Terminating existing rindexer process...");
+
+		// Try graceful termination first
+		globalProcess.kill("SIGTERM");
+
+		// Wait a bit for graceful shutdown
+		const timeout = setTimeout(() => {
+			console.log("Force killing rindexer process...");
+			globalProcess?.kill("SIGKILL");
+		}, 5000);
+
+		try {
+			await globalProcess.exited;
+			clearTimeout(timeout);
+			console.log("Rindexer process terminated successfully");
+		} catch (error) {
+			console.error("Error waiting for process termination:", error);
+		}
+
+		globalProcess = undefined;
+	}
+
+	// Wait a moment before starting new process
+	await new Promise((resolve) => setTimeout(resolve, 1000));
+	globalProcess = startRindexerProcess();
+};
+
 // Add contracts to rindexer.yaml
 app.post(
 	"/add-contract",
-	async ({
-		body,
-	}: {
-		body: {
-			name: string;
-			network: string;
-			address: string;
-			start_block: string;
-			abi: any;
-		};
-	}) => {
+	async ({ body }: { body: AddContractRequest }): Promise<ApiResponse> => {
 		try {
-			// Validate the request body
-			const { name, network, address, start_block, abi } = body;
-
-			if (!name || !network || !address || !start_block || !abi) {
+			// Validate request body
+			const validationError = validateAddContractRequest(body);
+			if (validationError) {
 				return {
 					success: false,
-					error:
-						"Missing required fields: name, network, address, start_block, and abi are required",
+					error: validationError,
 				};
 			}
 
-			// Read the current rindexer.yaml
-			const rindexerPath = path.join("/workspace", "rindexer.yaml");
-			const rindexerContent = fs.readFileSync(rindexerPath, "utf8");
-			const rindexerConfig = yaml.load(rindexerContent) as any;
+			const { name, network, address, start_block, abi, id } = body;
+			const contractName = `${name}_${id}`;
 
-			// Prepare new contract entry
-			const newContract = {
-				name,
+			// Read and parse rindexer.yaml
+			const rindexerPath = path.join("/workspace", "rindexer.yaml");
+			const rindexerContent = await fs.readFile(rindexerPath, "utf8");
+			const rindexerConfig = yaml.load(rindexerContent) as RindexerConfig;
+
+			// Initialize contracts array if it doesn't exist
+			if (!rindexerConfig.contracts) {
+				rindexerConfig.contracts = [];
+			}
+
+			// Check for duplicate contract names
+			const contractExists = rindexerConfig.contracts.some(
+				(contract) => contract.name === contractName,
+			);
+
+			if (contractExists) {
+				return {
+					success: false,
+					error: `Contract with name "${contractName}" already exists`,
+				};
+			}
+
+			// Create new contract entry
+			const newContract: RindexerContract = {
+				name: contractName,
 				details: [
 					{
 						network,
@@ -192,66 +288,42 @@ app.post(
 						start_block,
 					},
 				],
-				abi: `./abis/${name}.abi.json`,
+				abi: `./abis/${contractName}.abi.json`,
 			};
 
-			// Add the new contract to the YAML structure
-			if (!rindexerConfig.contracts) {
-				rindexerConfig.contracts = [];
-			}
-
-			// Check if contract with the same name already exists
-			const existingContractIndex = rindexerConfig.contracts.findIndex(
-				(c: any) => c.name === name,
-			);
-
-			if (existingContractIndex >= 0) {
-				return {
-					success: false,
-					error: `Contract with name "${name}" already exists`,
-				};
-			}
-
+			// Add contract to config
 			rindexerConfig.contracts.push(newContract);
 
-			// Write the updated YAML back to the file
+			// Write updated YAML
 			const updatedYaml = yaml.dump(rindexerConfig, {
 				lineWidth: -1,
 				noRefs: true,
 			});
+			await fs.writeFile(rindexerPath, updatedYaml);
 
-			fs.writeFileSync(rindexerPath, updatedYaml);
-
-			// Ensure abis directory exists
+			// Ensure abis directory exists and save ABI
 			const abisDir = path.join("/workspace", "abis");
-			if (!fs.existsSync(abisDir)) {
-				fs.mkdirSync(abisDir, { recursive: true });
-			}
+			await fs.ensureDir(abisDir);
 
-			// Save the ABI to the abis folder
-			const abiPath = path.join(abisDir, `${name}.abi.json`);
+			const abiPath = path.join(abisDir, `${contractName}.abi.json`);
+			const abiContent = parseAbi(abi);
+			await fs.writeFile(abiPath, JSON.stringify(abiContent, null, 2));
 
-			// If abi is a string, parse it to ensure it's valid JSON before writing
-			const abiContent = typeof abi === "string" ? JSON.parse(abi) : abi;
-			fs.writeFileSync(abiPath, JSON.stringify(abiContent, null, 2));
-
-			// Restart the rindexer process
-			if (globalProcess) {
-				console.log("Killing existing rindexer process...");
-				globalProcess.kill();
-				await globalProcess.exited; // ensure it's fully stopped
-			}
-			globalProcess = startRindexerProcess();
+			// Restart rindexer process
+			await restartRindexerProcess();
 
 			return {
 				success: true,
-				message: `Contract "${name}" has been added to rindexer.yaml and ABI saved to ${abiPath}`,
+				message: `Contract "${contractName}" has been added successfully`,
 			};
-		} catch (error: any) {
-			console.error("Error adding contract:", error);
+		} catch (error) {
+			const errorMessage =
+				error instanceof Error ? error.message : "Unknown error occurred";
+			console.error("Error adding contract:", errorMessage);
+
 			return {
 				success: false,
-				error: error.message || "Failed to add contract",
+				error: `Failed to add contract: ${errorMessage}`,
 			};
 		}
 	},
