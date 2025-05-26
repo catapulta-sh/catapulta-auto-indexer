@@ -1,4 +1,4 @@
-FROM ghcr.io/joshstevens19/rindexer-bundled:latest
+FROM ghcr.io/r0zh/rindexer-bundled:latest
 
 RUN apt-get update \
     && apt-get install -y unzip \
