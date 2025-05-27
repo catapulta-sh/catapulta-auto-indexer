@@ -24,6 +24,7 @@ services:
       - 3000:3000
     depends_on:
       - postgresql
+    init: true
     command: bash -c "bun run dev"
     env_file:
       - .env

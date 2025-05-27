@@ -21,6 +21,6 @@ services:
     working_dir: /workspace
     depends_on:
       - postgresql
-    command: sleep infinity
+    init: true
     env_file:
       - ../.env
