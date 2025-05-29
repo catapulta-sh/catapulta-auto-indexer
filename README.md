@@ -114,7 +114,7 @@ GET /events?contract_address=0xABC123...&event_name=Transfer&page_length=10&page
 {
   "contracts": [
     {
-      "name": "MyToken",
+      "name": "MyContract",
       "id": "001",
       "network": "ethereum",
       "address": "0xABC123...",
