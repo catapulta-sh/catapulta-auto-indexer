@@ -1,8 +1,11 @@
 import { Elysia } from "elysia";
+import { swagger } from "@elysiajs/swagger"
 import { Client } from "pg";
 import { type Subprocess } from "bun";
 import * as fs from "fs-extra";
 import * as yaml from "js-yaml";
+import { t } from "elysia";
+
 import {
 	type AddContractsRequest,
 	type BatchApiResponse,
@@ -42,7 +45,7 @@ const startRindexerProcess = () => {
 
 const app = new Elysia();
 
-// Configuración de PostgreSQL
+// PostgreSQL Configuration
 const client = new Client({
 	host: process.env.POSTGRES_HOST || "localhost",
 	port: Number(process.env.POSTGRES_PORT) || 5432,
@@ -58,97 +61,104 @@ globalProcess = startRindexerProcess();
 
 // GET /event-list
 app.get(
-	"/event-list",
-	async ({ query }: { query: { contract_address: string } }) => {
-		const address = query.contract_address.toLowerCase();
+  "/event-list",
+  async ({ query }) => {
+    const address = query.contract_address.toLowerCase();
+    const schema = "catapulta_auto_indexer_rocket_pool_eth";
 
-		const schema = "catapulta_auto_indexer_rocket_pool_eth";
+    const result = await client.query<{ table_name: string }>(
+      `SELECT table_name FROM information_schema.tables WHERE table_schema = $1`,
+      [schema]
+    );
 
-		// Obtener todas las tablas del esquema
-		const result = await client.query<{ table_name: string }>(
-			`
-      SELECT table_name 
-      FROM information_schema.tables 
-      WHERE table_schema = $1
-    `,
-			[schema],
-		);
+    const eventTables = result.rows.map((r) => r.table_name);
+    const events: string[] = [];
 
-		const eventTables = result.rows.map((r) => r.table_name);
-
-		const events: string[] = [];
-
-		for (const table of eventTables) {
-			const result = await client.query<{ has_event: boolean }>(
-				`
-        SELECT EXISTS (
-          SELECT 1 
-          FROM ${schema}."${table}"
+    for (const table of eventTables) {
+      const result = await client.query<{ has_event: boolean }>(
+        `SELECT EXISTS (
+          SELECT 1 FROM ${schema}."${table}"
           WHERE LOWER(contract_address) = $1
           LIMIT 1
-        ) AS has_event
-      `,
-				[address],
-			);
+        ) AS has_event`,
+        [address]
+      );
+      if (result.rows[0]?.has_event) events.push(table);
+    }
 
-			if (result.rows[0]?.has_event) {
-				events.push(table);
-			}
-		}
-
-		return { events };
-	},
+    return { events };
+  },
+  {
+    query: t.Object({
+      contract_address: t.String(),
+    }),
+    response: t.Object({
+      events: t.Array(t.String()),
+    }),
+    detail: {
+      summary: "List the available events for a contract",
+      tags: ["Events"],
+    },
+  }
 );
 
+
 app.get(
-	"/events",
-	async ({
-		query,
-	}: {
-		query: {
-			contract_address: string;
-			event_name: string;
-			page_length: number;
-			page: number;
-			sort_order: number;
-			offset: number;
-		};
-	}) => {
-		const {
-			contract_address,
-			event_name,
-			page_length,
-			page,
-			sort_order,
-			offset,
-		} = query;
+  "/events",
+  async ({ query }) => {
+    const {
+      contract_address,
+      event_name,
+      page_length,
+      page,
+      sort_order,
+      offset,
+    } = query;
 
-		const schema = "catapulta_auto_indexer_rocket_pool_eth";
-		const table = event_name.toLowerCase();
-		const address = contract_address.toLowerCase();
+    const schema = "catapulta_auto_indexer_rocket_pool_eth";
+    const table = event_name.toLowerCase();
+    const address = contract_address.toLowerCase();
 
-		const limit = page_length || 10;
-		const skip = offset || (page - 1) * limit;
-		const order = sort_order === 1 ? "ASC" : "DESC";
+    const skip = offset || (page - 1) * page_length;
+    const order = sort_order === 1 ? "ASC" : "DESC";
 
-		const result = await client.query(
-			`
+    const result = await client.query(
+      `
       SELECT * FROM ${schema}."${table}"
       WHERE LOWER(contract_address) = $1
       ORDER BY block_number ${order}
       LIMIT $2 OFFSET $3
     `,
-			[address, limit, skip],
-		);
+      [address, page_length, skip]
+    );
 
-		return {
-			events: result.rows,
-		};
-	},
+    return {
+      events: result.rows,
+    };
+  },
+  {
+    query: t.Object({
+      contract_address: t.String(),
+      event_name: t.String(),
+      page_length: t.Number(),
+      page: t.Number(),
+      sort_order: t.Number(), // 1 = ASC, -1 = DESC
+      offset: t.Number(),
+    }),
+    response: t.Object({
+      events: t.Array(t.Any()),
+    }),
+    detail: {
+      summary: "Paginated contract events by type",
+      tags: ["Events"],
+    },
+  }
 );
 
+
 // Proxy a graphql
-app.post("/graphql", async ({ request }) => {
+app.post("/graphql", async (ctx: { request: Request }) => {
+	const { request } = ctx;
 	const body = await request.json();
 
 	if (!body?.query) {
@@ -164,7 +174,19 @@ app.post("/graphql", async ({ request }) => {
 	});
 
 	return await response.json();
-});
+},{
+    body: t.Object({
+      query: t.String(),
+      variables: t.Optional(t.Record(t.String(), t.Any())),
+    }),
+    response: t.Unknown(),
+    detail: {
+      summary: "Proxy to Rindexer's GraphQL",
+      tags: ["GraphQL"],
+    },
+  }
+
+);
 
 // Helper functions for batch operations
 const restartRindexerProcess = async (): Promise<void> => {
@@ -310,7 +332,49 @@ app.post(
 				error: `Failed to add contracts: ${errorMessage}`,
 			};
 		}
-	},
+	}, {
+    body: t.Object({
+      contracts: t.Array(
+        t.Object({
+          name: t.String(),
+          id: t.String(),
+          network: t.String(),
+          address: t.String(),
+          start_block: t.String(),
+          abi: t.Any(),
+        })
+      ),
+    }),
+    response: t.Object({
+      success: t.Boolean(),
+      error: t.Optional(t.String()),
+      results: t.Array(
+        t.Object({
+          contract: t.String(),
+          success: t.Boolean(),
+          message: t.Optional(t.String()),
+          error: t.Optional(t.String()),
+        })
+      ),
+    }),
+    detail: {
+      summary: "Add multiple contracts to Rindexer (batch)",
+      tags: ["Contracts"],
+    },
+  }
+);
+
+app.use(
+  swagger({
+    path: "/docs",
+    documentation: {
+      info: {
+        title: "Catapulta Auto Indexer API",
+        version: "1.0.0",
+        description: "Public REST API Documentation for Rindexer",
+      },
+    },
+  })
 );
 
 // Ruta base
