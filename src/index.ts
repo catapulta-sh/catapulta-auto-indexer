@@ -13,7 +13,7 @@ import {
 	validateContract,
 	processContract,
 	updateRindexerConfig,
-	writeAbiFiles
+	writeAbiFiles,
 } from "./contract-helpers.js";
 
 let globalProcess: Subprocess | undefined;
@@ -199,7 +199,9 @@ const restartRindexerProcess = async (): Promise<void> => {
 // Batch add contracts endpoint
 app.post(
 	"/add-contracts",
-	async ({ body }: { body: AddContractsRequest }): Promise<BatchApiResponse> => {
+	async ({
+		body,
+	}: { body: AddContractsRequest }): Promise<BatchApiResponse> => {
 		try {
 			// 1. Validate batch request
 			const batchError = validateBatchRequest(body);
@@ -237,7 +239,8 @@ app.post(
 					results.push({
 						contract: contractName,
 						success: false,
-						error: error instanceof Error ? error.message : "Invalid ABI format",
+						error:
+							error instanceof Error ? error.message : "Invalid ABI format",
 					});
 				}
 			}
@@ -247,17 +250,17 @@ app.post(
 			}
 
 			// 3. Read existing config to identify replacements
-			const configPath = '/workspace/rindexer.yaml';
+			const configPath = "/workspace/rindexer.yaml";
 			let existingConfig: RindexerConfig = { contracts: [] };
 			try {
-				const content = await fs.readFile(configPath, 'utf8');
+				const content = await fs.readFile(configPath, "utf8");
 				existingConfig = yaml.load(content) as RindexerConfig;
 			} catch (error) {
 				// Config file doesn't exist or is invalid, use default
 			}
 
 			const existingContractNames = new Set(
-				(existingConfig.contracts || []).map(c => c.name)
+				(existingConfig.contracts || []).map((c) => c.name),
 			);
 
 			// 4. Deduplicate and prepare for updates
@@ -289,19 +292,23 @@ app.post(
 			await restartRindexerProcess();
 
 			// 7. Update success messages
-			const finalResults = results.map(r => ({
+			const finalResults = results.map((r) => ({
 				...r,
 				message: r.success
-					? `Contract "${r.contract}" ${replacedContracts.has(r.contract) ? 'replaced' : 'added'} successfully`
+					? `Contract "${r.contract}" ${replacedContracts.has(r.contract) ? "replaced" : "added"} successfully`
 					: r.message,
 			}));
 
 			return { success: true, results: finalResults };
-
 		} catch (error) {
-			const errorMessage = error instanceof Error ? error.message : "Unknown error occurred";
+			const errorMessage =
+				error instanceof Error ? error.message : "Unknown error occurred";
 			console.error("Error adding contracts batch:", errorMessage);
-			return { success: false, results: [], error: `Failed to add contracts: ${errorMessage}` };
+			return {
+				success: false,
+				results: [],
+				error: `Failed to add contracts: ${errorMessage}`,
+			};
 		}
 	},
 );
