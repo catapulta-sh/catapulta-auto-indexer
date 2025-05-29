@@ -1,24 +1,39 @@
 import { Elysia } from "elysia";
 import { Client } from "pg";
-import * as yaml from "js-yaml";
-import * as fs from "fs-extra";
-import * as path from "path";
 import { type Subprocess } from "bun";
+import * as fs from "fs-extra";
+import * as yaml from "js-yaml";
+import {
+	type AddContractsRequest,
+	type BatchApiResponse,
+	type RindexerConfig,
+} from "./types.js";
+import {
+	validateBatchRequest,
+	validateContract,
+	processContract,
+	updateRindexerConfig,
+	writeAbiFiles,
+} from "./contract-helpers.js";
 
 let globalProcess: Subprocess | undefined;
 
 const startRindexerProcess = () => {
-	console.log("Spawning rindexer process: rindexer start indexer");
+	console.log("Spawning rindexer process: rindexer start all");
 	const proc = Bun.spawn({
 		cmd: ["/app/rindexer", "start", "all"],
-		stdout: "inherit", // Pipe stdout to the current process
-		stderr: "inherit", // Pipe stderr to the current process
+		stdout: "inherit",
+		stderr: "inherit",
 		onExit: (proc, exitCode, signalCode, error) => {
 			console.log(
 				`Rindexer process exited with code: ${exitCode}, signal: ${signalCode}`,
 			);
 			if (error) {
 				console.error("Rindexer process error on exit:", error);
+			}
+			// Clean up the global reference when process exits
+			if (globalProcess === proc) {
+				globalProcess = undefined;
 			}
 		},
 	});
@@ -151,107 +166,148 @@ app.post("/graphql", async ({ request }) => {
 	return await response.json();
 });
 
-// Add contracts to rindexer.yaml
+// Helper functions for batch operations
+const restartRindexerProcess = async (): Promise<void> => {
+	if (globalProcess) {
+		console.log("Terminating existing rindexer process...");
+
+		// Try graceful termination first
+		globalProcess.kill("SIGTERM");
+
+		// Wait a bit for graceful shutdown
+		const timeout = setTimeout(() => {
+			console.log("Force killing rindexer process...");
+			globalProcess?.kill("SIGKILL");
+		}, 5000);
+
+		try {
+			await globalProcess.exited;
+			clearTimeout(timeout);
+			console.log("Rindexer process terminated successfully");
+		} catch (error) {
+			console.error("Error waiting for process termination:", error);
+		}
+
+		globalProcess = undefined;
+	}
+
+	// Wait a moment before starting new process
+	await new Promise((resolve) => setTimeout(resolve, 1000));
+	globalProcess = startRindexerProcess();
+};
+
+// Batch add contracts endpoint
 app.post(
-	"/add-contract",
+	"/add-contracts",
 	async ({
 		body,
-	}: {
-		body: {
-			name: string;
-			network: string;
-			address: string;
-			start_block: string;
-			abi: any;
-		};
-	}) => {
+	}: { body: AddContractsRequest }): Promise<BatchApiResponse> => {
 		try {
-			// Validate the request body
-			const { name, network, address, start_block, abi } = body;
-
-			if (!name || !network || !address || !start_block || !abi) {
-				return {
-					success: false,
-					error:
-						"Missing required fields: name, network, address, start_block, and abi are required",
-				};
+			// 1. Validate batch request
+			const batchError = validateBatchRequest(body);
+			if (batchError) {
+				return { success: false, results: [], error: batchError };
 			}
 
-			// Read the current rindexer.yaml
-			const rindexerPath = path.join("/workspace", "rindexer.yaml");
-			const rindexerContent = fs.readFileSync(rindexerPath, "utf8");
-			const rindexerConfig = yaml.load(rindexerContent) as any;
+			const { contracts } = body;
+			const results: BatchApiResponse["results"] = [];
+			const validContracts: ReturnType<typeof processContract>[] = [];
 
-			// Prepare new contract entry
-			const newContract = {
-				name,
-				details: [
-					{
-						network,
-						address,
-						start_block,
-					},
-				],
-				abi: `./abis/${name}.abi.json`,
-			};
+			// 2. Process and validate each contract
+			for (const contract of contracts) {
+				const contractName = `${contract.name}_${contract.id}`;
+				const validationError = validateContract(contract);
 
-			// Add the new contract to the YAML structure
-			if (!rindexerConfig.contracts) {
-				rindexerConfig.contracts = [];
+				if (validationError) {
+					results.push({
+						contract: contractName,
+						success: false,
+						error: validationError,
+					});
+					continue;
+				}
+
+				try {
+					const processed = processContract(contract);
+					validContracts.push(processed);
+					results.push({
+						contract: contractName,
+						success: true,
+						message: "Validated successfully",
+					});
+				} catch (error) {
+					results.push({
+						contract: contractName,
+						success: false,
+						error:
+							error instanceof Error ? error.message : "Invalid ABI format",
+					});
+				}
 			}
 
-			// Check if contract with the same name already exists
-			const existingContractIndex = rindexerConfig.contracts.findIndex(
-				(c: any) => c.name === name,
+			if (validContracts.length === 0) {
+				return { success: false, results, error: "No valid contracts to add." };
+			}
+
+			// 3. Read existing config to identify replacements
+			const configPath = "/workspace/rindexer.yaml";
+			let existingConfig: RindexerConfig = { contracts: [] };
+			try {
+				const content = await fs.readFile(configPath, "utf8");
+				existingConfig = yaml.load(content) as RindexerConfig;
+			} catch (error) {
+				// Config file doesn't exist or is invalid, use default
+			}
+
+			const existingContractNames = new Set(
+				(existingConfig.contracts || []).map((c) => c.name),
 			);
 
-			if (existingContractIndex >= 0) {
-				return {
-					success: false,
-					error: `Contract with name "${name}" already exists`,
-				};
+			// 4. Deduplicate and prepare for updates
+			const contractMap = new Map();
+			const abiFileMap = new Map();
+			const duplicateContracts = new Set();
+			const replacedContracts = new Set();
+
+			for (const contract of validContracts) {
+				if (contractMap.has(contract.contractName)) {
+					duplicateContracts.add(contract.contractName);
+				}
+				if (existingContractNames.has(contract.contractName)) {
+					replacedContracts.add(contract.contractName);
+				}
+				contractMap.set(contract.contractName, contract.rindexerContract);
+				abiFileMap.set(contract.contractName, contract.abiFile);
 			}
 
-			rindexerConfig.contracts.push(newContract);
+			const uniqueContracts = Array.from(contractMap.values());
+			const abiFiles = Array.from(abiFileMap.values());
+			const contractNames = Array.from(contractMap.keys());
 
-			// Write the updated YAML back to the file
-			const updatedYaml = yaml.dump(rindexerConfig, {
-				lineWidth: -1,
-				noRefs: true,
-			});
+			// 5. Update configuration and write files
+			await updateRindexerConfig(uniqueContracts, contractNames);
+			await writeAbiFiles(abiFiles);
 
-			fs.writeFileSync(rindexerPath, updatedYaml);
+			// 6. Restart process
+			await restartRindexerProcess();
 
-			// Ensure abis directory exists
-			const abisDir = path.join("/workspace", "abis");
-			if (!fs.existsSync(abisDir)) {
-				fs.mkdirSync(abisDir, { recursive: true });
-			}
+			// 7. Update success messages
+			const finalResults = results.map((r) => ({
+				...r,
+				message: r.success
+					? `Contract "${r.contract}" ${replacedContracts.has(r.contract) ? "replaced" : "added"} successfully`
+					: r.message,
+			}));
 
-			// Save the ABI to the abis folder
-			const abiPath = path.join(abisDir, `${name}.abi.json`);
-
-			// If abi is a string, parse it to ensure it's valid JSON before writing
-			const abiContent = typeof abi === "string" ? JSON.parse(abi) : abi;
-			fs.writeFileSync(abiPath, JSON.stringify(abiContent, null, 2));
-
-			// Restart the rindexer process
-			if (globalProcess) {
-				console.log("Killing existing rindexer process...");
-				globalProcess.kill();
-				await globalProcess.exited; // ensure it's fully stopped
-			}
-			globalProcess = startRindexerProcess();
-
-			return {
-				success: true,
-				message: `Contract "${name}" has been added to rindexer.yaml and ABI saved to ${abiPath}`,
-			};
-		} catch (error: any) {
-			console.error("Error adding contract:", error);
+			return { success: true, results: finalResults };
+		} catch (error) {
+			const errorMessage =
+				error instanceof Error ? error.message : "Unknown error occurred";
+			console.error("Error adding contracts batch:", errorMessage);
 			return {
 				success: false,
-				error: error.message || "Failed to add contract",
+				results: [],
+				error: `Failed to add contracts: ${errorMessage}`,
 			};
 		}
 	},
