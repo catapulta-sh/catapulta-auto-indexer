@@ -38,7 +38,13 @@ export interface RindexerContract {
 }
 
 export interface RindexerConfig {
+	name?: string;
 	contracts?: RindexerContract[];
+	storage?: {
+		postgres?: {
+			enabled?: boolean;
+		};
+	};
 	[key: string]: any;
 }
 
@@ -56,4 +62,33 @@ export interface BatchApiResponse {
 		error?: string;
 	}>;
 	error?: string;
+}
+
+// Custom error types for configuration validation
+export class RindexerConfigError extends Error {
+	constructor(message: string) {
+		super(message);
+		this.name = "RindexerConfigError";
+	}
+}
+
+export class ProjectNameMissingError extends RindexerConfigError {
+	constructor() {
+		super("No 'name' field found in rindexer.yaml. This is required for the service to start.");
+		this.name = "ProjectNameMissingError";
+	}
+}
+
+export class ProjectNameTooLongError extends RindexerConfigError {
+	constructor(projectName: string, maxLength: number = 32) {
+		super(`Project name '${projectName}' is too long. Maximum length is ${maxLength} characters.`);
+		this.name = "ProjectNameTooLongError";
+	}
+}
+
+export class PostgresNotEnabledError extends RindexerConfigError {
+	constructor() {
+		super("PostgreSQL storage is not enabled in rindexer.yaml. Please set 'storage.postgres.enabled' to true.");
+		this.name = "PostgresNotEnabledError";
+	}
 }

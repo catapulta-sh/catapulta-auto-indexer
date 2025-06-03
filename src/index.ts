@@ -15,6 +15,21 @@ import {
 	updateRindexerConfig,
 	writeAbiFiles,
 } from "./contract-helpers.js";
+import { loadRindexerConfig } from "./config.js";
+
+// Validate and load rindexer configuration
+let PROJECT_NAME: string;
+try {
+	const { projectName } = await loadRindexerConfig();
+	PROJECT_NAME = projectName;
+} catch (error) {
+	console.error("❌", error instanceof Error ? error.message : error);
+	console.error(
+		"   The service cannot start without a valid rindexer.yaml configuration file.",
+	);
+	process.exit(1);
+}
+
 
 let globalProcess: Subprocess | undefined;
 
