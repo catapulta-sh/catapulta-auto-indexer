@@ -30,9 +30,9 @@ try {
 	process.exit(1);
 }
 
-
 let globalProcess: Subprocess | undefined;
 
+// Function to start the rindexer process
 const startRindexerProcess = () => {
 	console.log("Spawning rindexer process: rindexer start all");
 	const proc = Bun.spawn({
@@ -55,8 +55,6 @@ const startRindexerProcess = () => {
 	return proc;
 };
 
-const app = new Elysia();
-
 // Configuración de PostgreSQL
 const client = new Client({
 	host: process.env.POSTGRES_HOST || "localhost",
@@ -70,6 +68,8 @@ await client.connect();
 
 // Start the rindexer process initially
 globalProcess = startRindexerProcess();
+
+const app = new Elysia();
 
 // GET /event-list
 app.get(

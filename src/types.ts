@@ -74,21 +74,27 @@ export class RindexerConfigError extends Error {
 
 export class ProjectNameMissingError extends RindexerConfigError {
 	constructor() {
-		super("No 'name' field found in rindexer.yaml. This is required for the service to start.");
+		super(
+			"No 'name' field found in rindexer.yaml. This is required for the service to start.",
+		);
 		this.name = "ProjectNameMissingError";
 	}
 }
 
 export class ProjectNameTooLongError extends RindexerConfigError {
 	constructor(projectName: string, maxLength: number = 32) {
-		super(`Project name '${projectName}' is too long. Maximum length is ${maxLength} characters.`);
+		super(
+			`Project name '${projectName}' is too long. Maximum length is ${maxLength} characters.`,
+		);
 		this.name = "ProjectNameTooLongError";
 	}
 }
 
 export class PostgresNotEnabledError extends RindexerConfigError {
 	constructor() {
-		super("PostgreSQL storage is not enabled in rindexer.yaml. Please set 'storage.postgres.enabled' to true.");
+		super(
+			"PostgreSQL storage is not enabled in rindexer.yaml. Please set 'storage.postgres.enabled' to true.",
+		);
 		this.name = "PostgresNotEnabledError";
 	}
 }
