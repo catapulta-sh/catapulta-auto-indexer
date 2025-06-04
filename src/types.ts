@@ -20,11 +20,11 @@ export type ContractAbi = AbiItem[];
 // Contract-related interfaces
 export interface AddContractRequest {
 	name: string;
+	report_id: string;
 	network: string;
 	address: string;
 	start_block: string;
 	abi: ContractAbi | string;
-	id: string;
 }
 
 export interface RindexerContract {

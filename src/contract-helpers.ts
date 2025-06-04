@@ -30,11 +30,11 @@ export function validateContract(
 ): string | null {
 	const required = [
 		"name",
+		"report_id",
 		"network",
 		"address",
 		"start_block",
 		"abi",
-		"id",
 	] as const;
 	const missing = required.filter((field) => !contract[field]);
 
@@ -56,7 +56,7 @@ export function parseAbi(abi: ContractAbi | string): ContractAbi {
 
 // Contract processing
 export function processContract(contract: AddContractRequest) {
-	const contractName = `${contract.name}_${contract.id}`;
+	const contractName = `${contract.name}_${contract.report_id}`;
 
 	const rindexerContract: RindexerContract = {
 		name: contractName,

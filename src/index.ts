@@ -230,7 +230,7 @@ app.post(
 
 			// 2. Process and validate each contract
 			for (const contract of contracts) {
-				const contractName = `${contract.name}_${contract.id}`;
+				const contractName = `${contract.name}_${contract.report_id}`;
 				const validationError = validateContract(contract);
 
 				if (validationError) {
