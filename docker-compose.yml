@@ -8,6 +8,7 @@ services:
     shm_size: 1g
     restart: always
     volumes:
+      - ./pg-init:/docker-entrypoint-initdb.d
       - postgres_data:/var/lib/postgresql/data
     ports:
       - 5440:5432
