@@ -334,3 +334,57 @@ export async function writeAbiFiles(
 		await fs.writeFile(filePath, abiFile.content, "utf8");
 	}
 }
+
+/**
+ * Processes contracts and returns both validation results and successfully processed contracts
+ * @param contracts - Array of contract requests to process
+ * @param client - Database client for processing
+ * @returns Object containing validation results and successfully processed contracts
+ */
+export async function processContractBatch(
+	contracts: AddContractRequest[],
+	client: Client,
+): Promise<{
+	results: import("./types.js").BatchApiResponse["results"];
+	processedContracts: ProcessedContract[];
+}> {
+	const results: import("./types.js").BatchApiResponse["results"] = [];
+	const processedContracts: ProcessedContract[] = [];
+
+	for (const contract of contracts) {
+		const nameUuid = `${contract.name}_${contract.report_id}`;
+
+		// Validate contract
+		const validationError = validateContract(contract);
+		if (validationError) {
+			results.push({
+				contract: nameUuid,
+				success: false,
+				error: validationError,
+			});
+			continue;
+		}
+
+		// Process contract
+		try {
+			const processed = await processContract(contract, client);
+			processedContracts.push(processed);
+
+			// Determine if this was added or replaced
+			const action = processed.isNewContract ? "added" : "replaced";
+			results.push({
+				contract: nameUuid,
+				success: true,
+				message: `Contract "${nameUuid}" ${action} successfully`,
+			});
+		} catch (error) {
+			results.push({
+				contract: nameUuid,
+				success: false,
+				error: error instanceof Error ? error.message : "Processing failed",
+			});
+		}
+	}
+
+	return { results, processedContracts };
+}

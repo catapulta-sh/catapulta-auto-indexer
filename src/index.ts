@@ -12,12 +12,10 @@ import {
 	initializeRindexerProcess,
 	restartRindexerProcess,
 	validateBatchRequest,
-	validateContract,
-	processContract,
 	writeAbiFiles,
 	prepareContractBatch,
 	updateRindexerConfig,
-	type ProcessedContract,
+	processContractBatch,
 } from "./helpers.js";
 
 // Validate and load rindexer configuration
@@ -141,56 +139,6 @@ app.post("/graphql", async ({ request }) => {
 	return await response.json();
 });
 
-/**
- * Processes contracts and returns both validation results and successfully processed contracts
- * @param contracts - Array of contract requests to process
- * @returns Object containing validation results and successfully processed contracts
- */
-async function processContractBatch(contracts: AddContractRequest[]): Promise<{
-	results: BatchApiResponse["results"];
-	processedContracts: ProcessedContract[];
-}> {
-	const results: BatchApiResponse["results"] = [];
-	const processedContracts: ProcessedContract[] = [];
-
-	for (const contract of contracts) {
-		const nameUuid = `${contract.name}_${contract.report_id}`;
-
-		// Validate contract
-		const validationError = validateContract(contract);
-		if (validationError) {
-			results.push({
-				contract: nameUuid,
-				success: false,
-				error: validationError,
-			});
-			continue;
-		}
-
-		// Process contract
-		try {
-			const processed = await processContract(contract, client);
-			processedContracts.push(processed);
-
-			// Determine if this was added or replaced
-			const action = processed.isNewContract ? "added" : "replaced";
-			results.push({
-				contract: nameUuid,
-				success: true,
-				message: `Contract "${nameUuid}" ${action} successfully`,
-			});
-		} catch (error) {
-			results.push({
-				contract: nameUuid,
-				success: false,
-				error: error instanceof Error ? error.message : "Processing failed",
-			});
-		}
-	}
-
-	return { results, processedContracts };
-}
-
 // Batch add contracts endpoint
 app.post(
 	"/add-contracts",
@@ -207,6 +155,7 @@ app.post(
 			// 2. Process all contracts (includes validation, processing, and message generation)
 			const { results, processedContracts } = await processContractBatch(
 				body.contracts,
+				client,
 			);
 
 			if (processedContracts.length === 0) {
