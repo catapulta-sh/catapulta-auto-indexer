@@ -1,6 +1,5 @@
 import { Elysia } from "elysia";
 import {
-	type AddContractRequest,
 	type AddContractsRequest,
 	type BatchApiResponse,
 } from "./types.js";
@@ -16,6 +15,8 @@ import {
 	prepareContractBatch,
 	updateRindexerConfig,
 	processContractBatch,
+	getProjectName,
+	toSnakeCase,
 } from "./helpers.js";
 
 // Validate and load rindexer configuration
@@ -39,41 +40,63 @@ initializeRindexerProcess();
 
 const app = new Elysia();
 
-// GET /event-list - Get all event tables for a contract address
+// GET /event-list - Get all event tables for a contract
 app.get(
 	"/event-list",
-	async ({ query }: { query: { contract_address: string } }) => {
-		const address = query.contract_address.toLowerCase();
+	async ({ query }: { query: { contract_name: string; report_id: string } }) => {
+		const { contract_name, report_id } = query;
 
-		// Get all tables in the schema
-		const result = await client.query<{ table_name: string }>(
-			`SELECT table_name 
-			 FROM information_schema.tables 
-			 WHERE table_schema = $1`,
-			[APP_CONSTANTS.SCHEMA_NAME],
-		);
+		try {
+			// Create the composite key from contract_name and report_id (same as in helpers.ts)
+			const nameUuid = `${contract_name}_${report_id}`;
 
-		const eventTables = result.rows.map((r) => r.table_name);
-		const events: string[] = [];
-
-		// Check which tables have events for this contract
-		for (const table of eventTables) {
-			const hasEventResult = await client.query<{ has_event: boolean }>(
-				`SELECT EXISTS (
-					SELECT 1 
-					FROM ${APP_CONSTANTS.SCHEMA_NAME}."${table}"
-					WHERE LOWER(contract_address) = $1
-					LIMIT 1
-				) AS has_event`,
-				[address],
+			// Look up the indexer_id from the mapping table
+			const mappingResult = await client.query<{ indexer_id: string }>(
+				"SELECT indexer_id FROM name_uuid_indexer_id_mapping WHERE name_uuid = $1",
+				[nameUuid],
 			);
 
-			if (hasEventResult.rows[0]?.has_event) {
-				events.push(table);
+			if (mappingResult.rows.length === 0) {
+				return {
+					error: `Contract "${nameUuid}" not found`,
+					contract_name,
+					report_id,
+					events: []
+				};
 			}
-		}
 
-		return { events };
+			const indexerId = mappingResult.rows[0].indexer_id;
+			const projectName = await getProjectName();
+			// Convert project name to snake_case for PostgreSQL schema naming
+			const schema_name = `${toSnakeCase(projectName)}_${indexerId}`;
+
+			// Get all tables in the schema
+			const tablesResult = await client.query<{ table_name: string }>(
+				`SELECT table_name 
+				 FROM information_schema.tables 
+				 WHERE table_schema = $1`,
+				[schema_name],
+			);
+
+			// All tables in the schema are events for this contract
+			const events = tablesResult.rows.map(row => row.table_name);
+
+			return {
+				events,
+				schema: schema_name,
+				contract_name,
+				report_id,
+				indexer_id: indexerId
+			};
+		} catch (error) {
+			console.error("Error in /event-list:", error);
+			return {
+				error: "Failed to retrieve event list",
+				contract_name,
+				report_id,
+				events: []
+			};
+		}
 	},
 );
 
@@ -84,38 +107,90 @@ app.get(
 		query,
 	}: {
 		query: {
-			contract_address: string;
+			contract_name: string;
+			report_id: string;
 			event_name: string;
-			page_length?: number;
-			page?: number;
 			sort_order?: number;
-			offset?: number;
 		};
 	}) => {
 		const {
-			contract_address,
+			contract_name,
+			report_id,
 			event_name,
-			page_length = 10,
-			page = 1,
 			sort_order = -1,
-			offset,
 		} = query;
 
-		const table = event_name.toLowerCase();
-		const address = contract_address.toLowerCase();
-		const limit = page_length;
-		const skip = offset || (page - 1) * limit;
-		const order = sort_order === 1 ? "ASC" : "DESC";
+		try {
+			// Create the composite key from contract_name and report_id (same as in helpers.ts)
+			const nameUuid = `${contract_name}_${report_id}`;
 
-		const result = await client.query(
-			`SELECT * FROM ${APP_CONSTANTS.SCHEMA_NAME}."${table}"
-			 WHERE LOWER(contract_address) = $1
-			 ORDER BY block_number ${order}
-			 LIMIT $2 OFFSET $3`,
-			[address, limit, skip],
-		);
+			// Look up the indexer_id from the mapping table
+			const mappingResult = await client.query<{ indexer_id: string }>(
+				"SELECT indexer_id FROM name_uuid_indexer_id_mapping WHERE name_uuid = $1",
+				[nameUuid],
+			);
 
-		return { events: result.rows };
+			if (mappingResult.rows.length === 0) {
+				return {
+					error: `Contract "${nameUuid}" not found`,
+					contract_name,
+					report_id,
+					events: []
+				};
+			}
+
+			const indexerId = mappingResult.rows[0].indexer_id;
+			const projectName = await getProjectName();
+			// Convert project name to snake_case for PostgreSQL schema naming
+			const schema_name = `${toSnakeCase(projectName)}_${indexerId}`;
+
+			// Validate event_name exists in the schema
+			const tableExistsResult = await client.query<{ exists: boolean }>(
+				`SELECT EXISTS (
+					SELECT 1 
+					FROM information_schema.tables 
+					WHERE table_schema = $1 AND table_name = $2
+				) AS exists`,
+				[schema_name, event_name],
+			);
+
+			if (!tableExistsResult.rows[0]?.exists) {
+				return {
+					error: `Event "${event_name}" not found for contract "${nameUuid}"`,
+					contract_name,
+					report_id,
+					event_name,
+					events: []
+				};
+			}
+
+			// Setup ordering
+			const order = sort_order === 1 ? "ASC" : "DESC";
+
+			// Query all events from the specific table
+			const result = await client.query(
+				`SELECT * FROM ${schema_name}."${event_name}"
+				 ORDER BY block_number ${order}, log_index ${order}`,
+			);
+
+			return {
+				events: result.rows,
+				schema: schema_name,
+				contract_name,
+				report_id,
+				event_name,
+				indexer_id: indexerId
+			};
+		} catch (error) {
+			console.error("Error in /events:", error);
+			return {
+				error: "Failed to retrieve events",
+				contract_name,
+				report_id,
+				event_name,
+				events: []
+			};
+		}
 	},
 );
 

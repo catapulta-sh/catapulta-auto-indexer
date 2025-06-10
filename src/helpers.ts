@@ -15,7 +15,6 @@ import type {
 export const APP_CONSTANTS = {
 	CONFIG_FILE_PATH: "/workspace/rindexer.yaml",
 	ABIS_DIR: "/workspace/abis",
-	SCHEMA_NAME: "public",
 	SERVER_PORT: 3000,
 	GRAPHQL_PORT: 3001,
 	MAX_CONTRACTS_PER_REQUEST: 50,
@@ -28,15 +27,29 @@ export const APP_CONSTANTS = {
 	},
 } as const;
 
+// Cached project name to avoid repeated file reads
+let cachedProjectName: string | null = null;
+
+export async function getProjectName(): Promise<string> {
+	if (cachedProjectName === null) {
+		const { projectName } = await loadRindexerConfig();
+		cachedProjectName = projectName;
+	}
+	return cachedProjectName;
+}
+
 const NANOID_ALPHABET = "_abcdefghijklmnopqrstuvwxyz";
 const NANOID_LENGTH = 10;
-const MAX_BATCH_SIZE = 50;
 
 // ===== UTILITIES =====
 const generateNanoid = customAlphabet(NANOID_ALPHABET, NANOID_LENGTH);
 
 export function parseAbi(abi: ContractAbi | string): ContractAbi {
 	return typeof abi === "string" ? JSON.parse(abi) : abi;
+}
+
+export function toSnakeCase(str: string): string {
+	return str.replace(/([A-Z])/g, '_$1').toLowerCase().replace(/^_/, '');
 }
 
 function isValidEthereumAddress(address: string): boolean {
