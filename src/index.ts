@@ -83,9 +83,6 @@ app.get(
 
 			return {
 				events,
-				schema: schema_name,
-				contract_name,
-				report_id,
 				indexer_id: indexerId
 			};
 		} catch (error) {
@@ -100,49 +97,28 @@ app.get(
 	},
 );
 
-// GET /events - Get paginated events for a specific contract and event type
+// GET /events - Get events for a specific contract and event type
 app.get(
 	"/events",
 	async ({
 		query,
 	}: {
 		query: {
-			contract_name: string;
-			report_id: string;
+			indexer_id: string;
 			event_name: string;
 			sort_order?: number;
 		};
 	}) => {
 		const {
-			contract_name,
-			report_id,
+			indexer_id,
 			event_name,
 			sort_order = -1,
 		} = query;
 
 		try {
-			// Create the composite key from contract_name and report_id (same as in helpers.ts)
-			const nameUuid = `${contract_name}_${report_id}`;
-
-			// Look up the indexer_id from the mapping table
-			const mappingResult = await client.query<{ indexer_id: string }>(
-				"SELECT indexer_id FROM name_uuid_indexer_id_mapping WHERE name_uuid = $1",
-				[nameUuid],
-			);
-
-			if (mappingResult.rows.length === 0) {
-				return {
-					error: `Contract "${nameUuid}" not found`,
-					contract_name,
-					report_id,
-					events: []
-				};
-			}
-
-			const indexerId = mappingResult.rows[0].indexer_id;
 			const projectName = await getProjectName();
 			// Convert project name to snake_case for PostgreSQL schema naming
-			const schema_name = `${toSnakeCase(projectName)}_${indexerId}`;
+			const schema_name = `${toSnakeCase(projectName)}_${indexer_id}`;
 
 			// Validate event_name exists in the schema
 			const tableExistsResult = await client.query<{ exists: boolean }>(
@@ -156,9 +132,8 @@ app.get(
 
 			if (!tableExistsResult.rows[0]?.exists) {
 				return {
-					error: `Event "${event_name}" not found for contract "${nameUuid}"`,
-					contract_name,
-					report_id,
+					error: `Event "${event_name}" not found in schema "${schema_name}"`,
+					indexer_id,
 					event_name,
 					events: []
 				};
@@ -174,19 +149,13 @@ app.get(
 			);
 
 			return {
-				events: result.rows,
-				schema: schema_name,
-				contract_name,
-				report_id,
-				event_name,
-				indexer_id: indexerId
+				events: result.rows
 			};
 		} catch (error) {
 			console.error("Error in /events:", error);
 			return {
 				error: "Failed to retrieve events",
-				contract_name,
-				report_id,
+				indexer_id,
 				event_name,
 				events: []
 			};
