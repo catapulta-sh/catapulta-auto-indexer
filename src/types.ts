@@ -1,4 +1,3 @@
-// More specific ABI types
 export interface AbiItem {
 	type: "function" | "event" | "constructor" | "fallback" | "receive";
 	name?: string;
@@ -16,8 +15,6 @@ export interface AbiItem {
 }
 
 export type ContractAbi = AbiItem[];
-
-// Contract-related interfaces
 export interface AddContractRequest {
 	name: string;
 	report_id: string;
@@ -48,7 +45,6 @@ export interface RindexerConfig {
 	[key: string]: any;
 }
 
-// API-related interfaces
 export interface AddContractsRequest {
 	contracts: AddContractRequest[];
 }
@@ -64,7 +60,6 @@ export interface BatchApiResponse {
 	error?: string;
 }
 
-// Custom error types for configuration validation
 export class RindexerConfigError extends Error {
 	constructor(message: string) {
 		super(message);

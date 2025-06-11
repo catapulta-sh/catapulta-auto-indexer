@@ -19,7 +19,14 @@ import {
 	toSnakeCase,
 } from "./helpers.js";
 
-// Validate and load rindexer configuration
+/**
+ * Rindexer API Server
+ * 
+ * Provides REST endpoints for managing blockchain contract indexing and event querying.
+ * Requires a valid rindexer.yaml configuration file to start.
+ */
+
+// Startup: Validate and load configuration
 try {
 	await loadRindexerConfig();
 	console.log("✅ Configuration loaded successfully");
@@ -31,26 +38,33 @@ try {
 	process.exit(1);
 }
 
-// Setup database connection
+// Startup: Establish database connection and initialize rindexer
 const client = createDatabaseClient();
 await connectDatabase(client);
-
-// Initialize the rindexer process
 initializeRindexerProcess();
 
 const app = new Elysia();
 
-// GET /event-list - Get all event tables for a contract
+/**
+ * GET /event-list
+ * 
+ * Returns all available event table names for a specific contract.
+ * Uses a composite key (contract_name + report_id) to look up the internal indexer_id.
+ * 
+ * @query contract_name - The contract identifier
+ * @query report_id - The report identifier for this contract instance
+ * @returns Array of event table names and the indexer_id
+ */
 app.get(
 	"/event-list",
 	async ({ query }: { query: { contract_name: string; report_id: string } }) => {
 		const { contract_name, report_id } = query;
 
 		try {
-			// Create the composite key from contract_name and report_id (same as in helpers.ts)
+			// Create composite key for contract lookup
 			const nameUuid = `${contract_name}_${report_id}`;
 
-			// Look up the indexer_id from the mapping table
+			// Resolve the internal indexer_id from the mapping table
 			const mappingResult = await client.query<{ indexer_id: string }>(
 				"SELECT indexer_id FROM name_uuid_indexer_id_mapping WHERE name_uuid = $1",
 				[nameUuid],
@@ -67,18 +81,17 @@ app.get(
 
 			const indexerId = mappingResult.rows[0].indexer_id;
 			const projectName = await getProjectName();
-			// Convert project name to snake_case for PostgreSQL schema naming
+			// Schema naming follows convention: {project_name}_{indexer_id}
 			const schema_name = `${toSnakeCase(projectName)}_${indexerId}`;
 
-			// Get all tables in the schema
+			// Query all tables in the contract's schema (each table represents an event type)
 			const tablesResult = await client.query<{ table_name: string }>(
 				`SELECT table_name 
-				 FROM information_schema.tables 
-				 WHERE table_schema = $1`,
+                 FROM information_schema.tables 
+                 WHERE table_schema = $1`,
 				[schema_name],
 			);
 
-			// All tables in the schema are events for this contract
 			const events = tablesResult.rows.map(row => row.table_name);
 
 			return {
@@ -97,7 +110,16 @@ app.get(
 	},
 );
 
-// GET /events - Get events for a specific contract and event type
+/**
+ * GET /events
+ * 
+ * Retrieves all events of a specific type for a contract, ordered by block number and log index.
+ * 
+ * @query indexer_id - Internal indexer identifier (obtained from /event-list)
+ * @query event_name - Name of the event table to query
+ * @query sort_order - Optional sort direction: 1 for ASC, -1 for DESC (default: -1)
+ * @returns Array of event records with all their fields
+ */
 app.get(
 	"/events",
 	async ({
@@ -117,16 +139,15 @@ app.get(
 
 		try {
 			const projectName = await getProjectName();
-			// Convert project name to snake_case for PostgreSQL schema naming
 			const schema_name = `${toSnakeCase(projectName)}_${indexer_id}`;
 
-			// Validate event_name exists in the schema
+			// Verify the event table exists in the schema
 			const tableExistsResult = await client.query<{ exists: boolean }>(
 				`SELECT EXISTS (
-					SELECT 1 
-					FROM information_schema.tables 
-					WHERE table_schema = $1 AND table_name = $2
-				) AS exists`,
+                    SELECT 1 
+                    FROM information_schema.tables 
+                    WHERE table_schema = $1 AND table_name = $2
+                ) AS exists`,
 				[schema_name, event_name],
 			);
 
@@ -139,13 +160,12 @@ app.get(
 				};
 			}
 
-			// Setup ordering
+			// Order by blockchain natural ordering: block number, then log index
 			const order = sort_order === 1 ? "ASC" : "DESC";
 
-			// Query all events from the specific table
 			const result = await client.query(
 				`SELECT * FROM ${schema_name}."${event_name}"
-				 ORDER BY block_number ${order}, log_index ${order}`,
+                 ORDER BY block_number ${order}, log_index ${order}`,
 			);
 
 			return {
@@ -163,7 +183,14 @@ app.get(
 	},
 );
 
-// GraphQL proxy endpoint
+/**
+ * POST /graphql
+ * 
+ * Proxy endpoint for GraphQL queries. Forwards requests to the internal GraphQL server.
+ * 
+ * @body GraphQL query object with required 'query' field
+ * @returns GraphQL response or error
+ */
 app.post("/graphql", async ({ request }) => {
 	const body = await request.json();
 
@@ -183,20 +210,28 @@ app.post("/graphql", async ({ request }) => {
 	return await response.json();
 });
 
-// Batch add contracts endpoint
+/**
+ * POST /add-contracts
+ * 
+ * Batch endpoint for adding multiple contracts to the indexer.
+ * Validates contracts, updates configuration, writes ABI files, and restarts the indexer process.
+ * 
+ * @body AddContractsRequest - Array of contract configurations to add
+ * @returns BatchApiResponse with success status and individual contract results
+ */
 app.post(
 	"/add-contracts",
 	async ({
 		body,
 	}: { body: AddContractsRequest }): Promise<BatchApiResponse> => {
 		try {
-			// 1. Validate batch request
+			// Validate the entire batch request structure
 			const batchError = validateBatchRequest(body);
 			if (batchError) {
 				return { success: false, results: [], error: batchError };
 			}
 
-			// 2. Process all contracts (includes validation, processing, and message generation)
+			// Process and validate each contract individually
 			const { results, processedContracts } = await processContractBatch(
 				body.contracts,
 				client,
@@ -206,15 +241,15 @@ app.post(
 				return { success: false, results, error: "No valid contracts to add." };
 			}
 
-			// 3. Prepare data for configuration updates (handles deduplication)
+			// Prepare configuration data (handles deduplication of contracts and ABIs)
 			const { contracts, abiFiles } =
 				prepareContractBatch(processedContracts);
 
-			// 4. Update configuration and write files
+			// Apply changes: update config file and write ABI files
 			await updateRindexerConfig(contracts);
 			await writeAbiFiles(abiFiles);
 
-			// 5. Restart rindexer process
+			// Restart the indexer to pick up new configuration
 			await restartRindexerProcess();
 
 			return { success: true, results };
@@ -231,10 +266,10 @@ app.post(
 	},
 );
 
-// Ruta base
+// Health check endpoint
 app.get("/", () => "Hello Elysia");
 
-// Iniciar servidor
+// Start the server
 app.listen(APP_CONSTANTS.SERVER_PORT, () => {
 	console.log(
 		`🦊 Elysia is running at http://${app.server?.hostname}:${app.server?.port}`,

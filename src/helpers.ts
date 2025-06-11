@@ -1,3 +1,7 @@
+/**
+ * Helper utilities for Rindexer configuration and contract management.
+ */
+
 import { customAlphabet } from "nanoid";
 import { Client } from "pg";
 import * as fs from "fs-extra";
@@ -12,6 +16,10 @@ import type {
 } from "./types.js";
 
 // ===== CONSTANTS =====
+
+/**
+ * Application constants. Database settings configurable via environment variables.
+ */
 export const APP_CONSTANTS = {
 	CONFIG_FILE_PATH: "/workspace/rindexer.yaml",
 	ABIS_DIR: "/workspace/abis",
@@ -27,9 +35,12 @@ export const APP_CONSTANTS = {
 	},
 } as const;
 
-// Cached project name to avoid repeated file reads
+// Cached project name to avoid repeated file system reads
 let cachedProjectName: string | null = null;
 
+/**
+ * Retrieves the project name from configuration with caching.
+ */
 export async function getProjectName(): Promise<string> {
 	if (cachedProjectName === null) {
 		const { projectName } = await loadRindexerConfig();
@@ -38,10 +49,12 @@ export async function getProjectName(): Promise<string> {
 	return cachedProjectName;
 }
 
+// Custom alphabet for generating unique indexer IDs
 const NANOID_ALPHABET = "_abcdefghijklmnopqrstuvwxyz";
 const NANOID_LENGTH = 10;
 
 // ===== UTILITIES =====
+
 const generateNanoid = customAlphabet(NANOID_ALPHABET, NANOID_LENGTH);
 
 export function parseAbi(abi: ContractAbi | string): ContractAbi {
@@ -57,6 +70,7 @@ function isValidEthereumAddress(address: string): boolean {
 }
 
 // ===== DATABASE =====
+
 export function createDatabaseClient(): Client {
 	return new Client({
 		host: APP_CONSTANTS.DB.HOST,
@@ -67,6 +81,9 @@ export function createDatabaseClient(): Client {
 	});
 }
 
+/**
+ * Connects to PostgreSQL database. Exits process on failure.
+ */
 export async function connectDatabase(client: Client): Promise<void> {
 	try {
 		await client.connect();
@@ -78,9 +95,9 @@ export async function connectDatabase(client: Client): Promise<void> {
 }
 
 // ===== PROCESS MANAGEMENT =====
+
 let globalProcess: any | undefined;
 
-// Function to start the rindexer process
 export function initializeRindexerProcess(): void {
 	console.log("🚀 Starting rindexer process...");
 
@@ -95,7 +112,6 @@ export function initializeRindexerProcess(): void {
 			if (error) {
 				console.error("❌ Rindexer process error on exit:", error);
 			}
-			// Clean up the global reference when process exits
 			if (globalProcess === proc) {
 				globalProcess = undefined;
 			}
@@ -105,16 +121,18 @@ export function initializeRindexerProcess(): void {
 	globalProcess = proc;
 }
 
+/**
+ * Gracefully restarts the Rindexer process.
+ */
 export async function restartRindexerProcess(): Promise<void> {
 	console.log("🔄 Restarting rindexer process...");
 
 	if (globalProcess) {
 		console.log("Terminating existing rindexer process...");
 
-		// Try graceful termination first
 		globalProcess.kill("SIGTERM");
 
-		// Wait a bit for graceful shutdown
+		// Force kill after 5 seconds if graceful shutdown fails
 		const timeout = setTimeout(() => {
 			console.log("Force killing rindexer process...");
 			globalProcess?.kill("SIGKILL");
@@ -131,7 +149,6 @@ export async function restartRindexerProcess(): Promise<void> {
 		globalProcess = undefined;
 	}
 
-	// Wait a moment before starting new process
 	await new Promise((resolve) => setTimeout(resolve, 1000));
 	initializeRindexerProcess();
 
@@ -139,6 +156,10 @@ export async function restartRindexerProcess(): Promise<void> {
 }
 
 // ===== CONFIG MANAGEMENT =====
+
+/**
+ * Loads and validates the Rindexer configuration from rindexer.yaml.
+ */
 export async function loadRindexerConfig(): Promise<{
 	projectName: string;
 	config: RindexerConfig;
@@ -156,6 +177,7 @@ export async function loadRindexerConfig(): Promise<{
 			);
 		}
 
+		// PostgreSQL has a 63-character limit for database names
 		if (config.name.length > 63) {
 			throw new Error("Project name must be 63 characters or less");
 		}
@@ -175,36 +197,36 @@ export async function loadRindexerConfig(): Promise<{
 	}
 }
 
+/**
+ * Updates the Rindexer configuration file with new contracts.
+ */
 export async function updateRindexerConfig(
 	newContracts: RindexerContract[],
 ): Promise<void> {
 	const { config } = await loadRindexerConfig();
 
-	// Initialize contracts array if it doesn't exist
 	if (!config.contracts) {
 		config.contracts = [];
 	}
 
-	// Create a map of existing contracts by name for efficient lookup
+	// Use Map for efficient O(1) lookups when merging contracts
 	const existingContractsMap = new Map<string, RindexerContract>();
 	for (const contract of config.contracts) {
 		existingContractsMap.set(contract.name, contract);
 	}
 
-	// Add or update contracts
 	for (const newContract of newContracts) {
 		existingContractsMap.set(newContract.name, newContract);
 	}
 
-	// Update contracts array with merged contracts
 	config.contracts = Array.from(existingContractsMap.values());
 
-	// Write updated config
 	const yamlStr = yaml.dump(config, { indent: 2, lineWidth: -1 });
 	await fs.writeFile(APP_CONSTANTS.CONFIG_FILE_PATH, yamlStr, "utf8");
 }
 
 // ===== VALIDATION =====
+
 export function validateBatchRequest(
 	body: Partial<AddContractsRequest>,
 ): string | null {
@@ -251,6 +273,7 @@ export function validateContract(contract: AddContractRequest): string | null {
 }
 
 // ===== CONTRACT PROCESSING =====
+
 export interface ProcessedContract {
 	contract: RindexerContract;
 	abiFile: { filename: string; content: string };
@@ -258,17 +281,21 @@ export interface ProcessedContract {
 	isNewContract: boolean;
 }
 
+/**
+ * Processes a contract request into Rindexer configuration format.
+ * Creates or retrieves indexer ID and handles database mapping.
+ */
 export async function processContract(
 	contractRequest: AddContractRequest,
 	client: Client,
 ): Promise<ProcessedContract> {
 	const abi = parseAbi(contractRequest.abi);
 
-	// Create the composite key from name and report_id
+	// Create composite key for unique contract identification
 	const nameUuid = `${contractRequest.name}_${contractRequest.report_id}`;
 	console.log(`Processing contract: ${nameUuid}`);
 
-	// Check if contract already exists
+	// Check if contract already exists in mapping table
 	const existingResult = await client.query(
 		"SELECT indexer_id FROM name_uuid_indexer_id_mapping WHERE name_uuid = $1",
 		[nameUuid],
@@ -278,11 +305,9 @@ export async function processContract(
 	let isNewContract: boolean;
 
 	if (existingResult.rows.length > 0) {
-		// Contract exists, use existing indexer_id
 		indexerId = existingResult.rows[0].indexer_id;
 		isNewContract = false;
 	} else {
-		// New contract, generate new indexer_id and insert mapping
 		indexerId = generateNanoid();
 		await client.query(
 			"INSERT INTO name_uuid_indexer_id_mapping (name_uuid, indexer_id) VALUES ($1, $2)",
@@ -316,6 +341,9 @@ export async function processContract(
 	};
 }
 
+/**
+ * Prepares processed contracts for batch operations with deduplication.
+ */
 export function prepareContractBatch(processedContracts: ProcessedContract[]): {
 	contracts: RindexerContract[];
 	abiFiles: { filename: string; content: string }[];
@@ -349,10 +377,8 @@ export async function writeAbiFiles(
 }
 
 /**
- * Processes contracts and returns both validation results and successfully processed contracts
- * @param contracts - Array of contract requests to process
- * @param client - Database client for processing
- * @returns Object containing validation results and successfully processed contracts
+ * Processes a batch of contract requests with validation and error handling.
+ * Returns both API response results and successfully processed contracts.
  */
 export async function processContractBatch(
 	contracts: AddContractRequest[],
@@ -367,7 +393,6 @@ export async function processContractBatch(
 	for (const contract of contracts) {
 		const nameUuid = `${contract.name}_${contract.report_id}`;
 
-		// Validate contract
 		const validationError = validateContract(contract);
 		if (validationError) {
 			results.push({
@@ -378,12 +403,10 @@ export async function processContractBatch(
 			continue;
 		}
 
-		// Process contract
 		try {
 			const processed = await processContract(contract, client);
 			processedContracts.push(processed);
 
-			// Determine if this was added or replaced
 			const action = processed.isNewContract ? "added" : "replaced";
 			results.push({
 				contract: nameUuid,
