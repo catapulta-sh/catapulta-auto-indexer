@@ -22,5 +22,5 @@
 		3000,
 		3001
 	], 
-	"postCreateCommand": "echo 'alias rindexer=/app/rindexer' >> ~/.bashrc && bash -i -c 'curl -L https://foundry.paradigm.xyz | bash && source /root/.bashrc && foundryup && export PATH=\"$PATH:$HOME/.foundry/bin\" && echo \"export PATH=$PATH:$HOME/.foundry/bin\" >> ~/.bashrc && source ~/.bashrc && curl --proto \"=https\" --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y && source \"$HOME/.cargo/env\" && curl -L https://rindexer.xyz/install.sh | bash'"
+	"postCreateCommand": "echo 'alias rindexer=/app/rindexer' >> ~/.bashrc && bash -i -c 'curl -L https://foundry.paradigm.xyz | bash && source /root/.bashrc && foundryup && export PATH=\"$PATH:$HOME/.foundry/bin\" && echo \"export PATH=$PATH:$HOME/.foundry/bin\" >> ~/.bashrc && source ~/.bashrc && curl --proto \"=https\" --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y && source \"$HOME/.cargo/env\" && curl -L https://rindexer.xyz/install.sh | bash && cd e2e/foundry && forge build'"
 }

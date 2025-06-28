@@ -1,0 +1,6 @@
+name: Bank
+details:
+  - network: anvil
+    address: '0x5FbDB2315678afecb367f032d93F642f64180aa3'
+    start_block: '0'
+abi: ./abis/Bank.abi.json
