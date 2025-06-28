@@ -1,138 +1,196 @@
 import { Elysia } from "elysia";
-import { Client } from "pg";
-import * as yaml from "js-yaml";
-import * as fs from "fs-extra";
-import * as path from "path";
-import { type Subprocess } from "bun";
+import {
+	type AddContractsRequest,
+	type BatchApiResponse,
+} from "./types.js";
+import {
+	APP_CONSTANTS,
+	loadRindexerConfig,
+	createDatabaseClient,
+	connectDatabase,
+	initializeRindexerProcess,
+	restartRindexerProcess,
+	validateBatchRequest,
+	writeAbiFiles,
+	prepareContractBatch,
+	updateRindexerConfig,
+	processContractBatch,
+	getProjectName,
+	toSnakeCase,
+} from "./helpers.js";
 
-let globalProcess: Subprocess | undefined;
+/**
+ * Rindexer API Server
+ * 
+ * Provides REST endpoints for managing blockchain contract indexing and event querying.
+ * Requires a valid rindexer.yaml configuration file to start.
+ */
 
-const startRindexerProcess = () => {
-	console.log("Spawning rindexer process: rindexer start indexer");
-	const proc = Bun.spawn({
-		cmd: ["/app/rindexer", "start", "all"],
-		stdout: "inherit", // Pipe stdout to the current process
-		stderr: "inherit", // Pipe stderr to the current process
-		onExit: (proc, exitCode, signalCode, error) => {
-			console.log(
-				`Rindexer process exited with code: ${exitCode}, signal: ${signalCode}`,
-			);
-			if (error) {
-				console.error("Rindexer process error on exit:", error);
-			}
-		},
-	});
-	return proc;
-};
+// Startup: Validate and load configuration
+try {
+	await loadRindexerConfig();
+	console.log("✅ Configuration loaded successfully");
+} catch (error) {
+	console.error("❌", error instanceof Error ? error.message : error);
+	console.error(
+		"   The service cannot start without a valid rindexer.yaml configuration file.",
+	);
+	process.exit(1);
+}
+
+// Startup: Establish database connection and initialize rindexer
+const client = createDatabaseClient();
+await connectDatabase(client);
+initializeRindexerProcess();
 
 const app = new Elysia();
 
-// Configuración de PostgreSQL
-const client = new Client({
-	host: process.env.POSTGRES_HOST || "localhost",
-	port: Number(process.env.POSTGRES_PORT) || 5432,
-	user: process.env.POSTGRES_USER || "postgres",
-	password: process.env.POSTGRES_PASSWORD || "password",
-	database: process.env.POSTGRES_DB || "postgres",
-});
-
-await client.connect();
-
-// Start the rindexer process initially
-globalProcess = startRindexerProcess();
-
-// GET /event-list
+/**
+ * GET /event-list
+ * 
+ * Returns all available event table names for a specific contract.
+ * Uses a composite key (contract_name + report_id) to look up the internal indexer_id.
+ * 
+ * @query contract_name - The contract identifier
+ * @query report_id - The report identifier for this contract instance
+ * @returns Array of event table names and the indexer_id
+ */
 app.get(
 	"/event-list",
-	async ({ query }: { query: { contract_address: string } }) => {
-		const address = query.contract_address.toLowerCase();
+	async ({ query }: { query: { contract_name: string; report_id: string } }) => {
+		const { contract_name, report_id } = query;
 
-		const schema = "catapulta_auto_indexer_rocket_pool_eth";
+		try {
+			// Create composite key for contract lookup
+			const nameUuid = `${contract_name}_${report_id}`;
 
-		// Obtener todas las tablas del esquema
-		const result = await client.query<{ table_name: string }>(
-			`
-      SELECT table_name 
-      FROM information_schema.tables 
-      WHERE table_schema = $1
-    `,
-			[schema],
-		);
-
-		const eventTables = result.rows.map((r) => r.table_name);
-
-		const events: string[] = [];
-
-		for (const table of eventTables) {
-			const result = await client.query<{ has_event: boolean }>(
-				`
-        SELECT EXISTS (
-          SELECT 1 
-          FROM ${schema}."${table}"
-          WHERE LOWER(contract_address) = $1
-          LIMIT 1
-        ) AS has_event
-      `,
-				[address],
+			// Resolve the internal indexer_id from the mapping table
+			const mappingResult = await client.query<{ indexer_id: string }>(
+				"SELECT indexer_id FROM name_uuid_indexer_id_mapping WHERE name_uuid = $1",
+				[nameUuid],
 			);
 
-			if (result.rows[0]?.has_event) {
-				events.push(table);
+			if (mappingResult.rows.length === 0) {
+				return {
+					error: `Contract "${nameUuid}" not found`,
+					contract_name,
+					report_id,
+					events: []
+				};
 			}
-		}
 
-		return { events };
+			const indexerId = mappingResult.rows[0].indexer_id;
+			const projectName = await getProjectName();
+			// Schema naming follows convention: {project_name}_{indexer_id}
+			const schema_name = `${toSnakeCase(projectName)}_${indexerId}`;
+
+			// Query all tables in the contract's schema (each table represents an event type)
+			const tablesResult = await client.query<{ table_name: string }>(
+				`SELECT table_name 
+                 FROM information_schema.tables 
+                 WHERE table_schema = $1`,
+				[schema_name],
+			);
+
+			const events = tablesResult.rows.map(row => row.table_name);
+
+			return {
+				events,
+				indexer_id: indexerId
+			};
+		} catch (error) {
+			console.error("Error in /event-list:", error);
+			return {
+				error: "Failed to retrieve event list",
+				contract_name,
+				report_id,
+				events: []
+			};
+		}
 	},
 );
 
+/**
+ * GET /events
+ * 
+ * Retrieves all events of a specific type for a contract, ordered by block number and log index.
+ * 
+ * @query indexer_id - Internal indexer identifier (obtained from /event-list)
+ * @query event_name - Name of the event table to query
+ * @query sort_order - Optional sort direction: 1 for ASC, -1 for DESC (default: -1)
+ * @returns Array of event records with all their fields
+ */
 app.get(
 	"/events",
 	async ({
 		query,
 	}: {
 		query: {
-			contract_address: string;
+			indexer_id: string;
 			event_name: string;
-			page_length: number;
-			page: number;
-			sort_order: number;
-			offset: number;
+			sort_order?: number;
 		};
 	}) => {
 		const {
-			contract_address,
+			indexer_id,
 			event_name,
-			page_length,
-			page,
-			sort_order,
-			offset,
+			sort_order = -1,
 		} = query;
 
-		const schema = "catapulta_auto_indexer_rocket_pool_eth";
-		const table = event_name.toLowerCase();
-		const address = contract_address.toLowerCase();
+		try {
+			const projectName = await getProjectName();
+			const schema_name = `${toSnakeCase(projectName)}_${indexer_id}`;
 
-		const limit = page_length || 10;
-		const skip = offset || (page - 1) * limit;
-		const order = sort_order === 1 ? "ASC" : "DESC";
+			// Verify the event table exists in the schema
+			const tableExistsResult = await client.query<{ exists: boolean }>(
+				`SELECT EXISTS (
+                    SELECT 1 
+                    FROM information_schema.tables 
+                    WHERE table_schema = $1 AND table_name = $2
+                ) AS exists`,
+				[schema_name, event_name],
+			);
 
-		const result = await client.query(
-			`
-      SELECT * FROM ${schema}."${table}"
-      WHERE LOWER(contract_address) = $1
-      ORDER BY block_number ${order}
-      LIMIT $2 OFFSET $3
-    `,
-			[address, limit, skip],
-		);
+			if (!tableExistsResult.rows[0]?.exists) {
+				return {
+					error: `Event "${event_name}" not found in schema "${schema_name}"`,
+					indexer_id,
+					event_name,
+					events: []
+				};
+			}
 
-		return {
-			events: result.rows,
-		};
+			// Order by blockchain natural ordering: block number, then log index
+			const order = sort_order === 1 ? "ASC" : "DESC";
+
+			const result = await client.query(
+				`SELECT * FROM ${schema_name}."${event_name}"
+                 ORDER BY block_number ${order}, log_index ${order}`,
+			);
+
+			return {
+				events: result.rows
+			};
+		} catch (error) {
+			console.error("Error in /events:", error);
+			return {
+				error: "Failed to retrieve events",
+				indexer_id,
+				event_name,
+				events: []
+			};
+		}
 	},
 );
 
-// Proxy a graphql
+/**
+ * POST /graphql
+ * 
+ * Proxy endpoint for GraphQL queries. Forwards requests to the internal GraphQL server.
+ * 
+ * @body GraphQL query object with required 'query' field
+ * @returns GraphQL response or error
+ */
 app.post("/graphql", async ({ request }) => {
 	const body = await request.json();
 
@@ -140,129 +198,80 @@ app.post("/graphql", async ({ request }) => {
 		return { error: 'The field "query" is required.' };
 	}
 
-	const response = await fetch("http://localhost:3001/graphql", {
-		method: "POST",
-		headers: {
-			"Content-Type": "application/json",
+	const response = await fetch(
+		`http://localhost:${APP_CONSTANTS.GRAPHQL_PORT}/graphql`,
+		{
+			method: "POST",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify(body),
 		},
-		body: JSON.stringify(body),
-	});
+	);
 
 	return await response.json();
 });
 
-// Add contracts to rindexer.yaml
+/**
+ * POST /add-contracts
+ * 
+ * Batch endpoint for adding multiple contracts to the indexer.
+ * Validates contracts, updates configuration, writes ABI files, and restarts the indexer process.
+ * 
+ * @body AddContractsRequest - Array of contract configurations to add
+ * @returns BatchApiResponse with success status and individual contract results
+ */
 app.post(
-	"/add-contract",
+	"/add-contracts",
 	async ({
 		body,
-	}: {
-		body: {
-			name: string;
-			network: string;
-			address: string;
-			start_block: string;
-			abi: any;
-		};
-	}) => {
+	}: { body: AddContractsRequest }): Promise<BatchApiResponse> => {
 		try {
-			// Validate the request body
-			const { name, network, address, start_block, abi } = body;
-
-			if (!name || !network || !address || !start_block || !abi) {
-				return {
-					success: false,
-					error:
-						"Missing required fields: name, network, address, start_block, and abi are required",
-				};
+			// Validate the entire batch request structure
+			const batchError = validateBatchRequest(body);
+			if (batchError) {
+				return { success: false, results: [], error: batchError };
 			}
 
-			// Read the current rindexer.yaml
-			const rindexerPath = path.join("/workspace", "rindexer.yaml");
-			const rindexerContent = fs.readFileSync(rindexerPath, "utf8");
-			const rindexerConfig = yaml.load(rindexerContent) as any;
-
-			// Prepare new contract entry
-			const newContract = {
-				name,
-				details: [
-					{
-						network,
-						address,
-						start_block,
-					},
-				],
-				abi: `./abis/${name}.abi.json`,
-			};
-
-			// Add the new contract to the YAML structure
-			if (!rindexerConfig.contracts) {
-				rindexerConfig.contracts = [];
-			}
-
-			// Check if contract with the same name already exists
-			const existingContractIndex = rindexerConfig.contracts.findIndex(
-				(c: any) => c.name === name,
+			// Process and validate each contract individually
+			const { results, processedContracts } = await processContractBatch(
+				body.contracts,
+				client,
 			);
 
-			if (existingContractIndex >= 0) {
-				return {
-					success: false,
-					error: `Contract with name "${name}" already exists`,
-				};
+			if (processedContracts.length === 0) {
+				return { success: false, results, error: "No valid contracts to add." };
 			}
 
-			rindexerConfig.contracts.push(newContract);
+			// Prepare configuration data (handles deduplication of contracts and ABIs)
+			const { contracts, abiFiles } =
+				prepareContractBatch(processedContracts);
 
-			// Write the updated YAML back to the file
-			const updatedYaml = yaml.dump(rindexerConfig, {
-				lineWidth: -1,
-				noRefs: true,
-			});
+			// Apply changes: update config file and write ABI files
+			await updateRindexerConfig(contracts);
+			await writeAbiFiles(abiFiles);
 
-			fs.writeFileSync(rindexerPath, updatedYaml);
+			// Restart the indexer to pick up new configuration
+			await restartRindexerProcess();
 
-			// Ensure abis directory exists
-			const abisDir = path.join("/workspace", "abis");
-			if (!fs.existsSync(abisDir)) {
-				fs.mkdirSync(abisDir, { recursive: true });
-			}
-
-			// Save the ABI to the abis folder
-			const abiPath = path.join(abisDir, `${name}.abi.json`);
-
-			// If abi is a string, parse it to ensure it's valid JSON before writing
-			const abiContent = typeof abi === "string" ? JSON.parse(abi) : abi;
-			fs.writeFileSync(abiPath, JSON.stringify(abiContent, null, 2));
-
-			// Restart the rindexer process
-			if (globalProcess) {
-				console.log("Killing existing rindexer process...");
-				globalProcess.kill();
-				await globalProcess.exited; // ensure it's fully stopped
-			}
-			globalProcess = startRindexerProcess();
-
-			return {
-				success: true,
-				message: `Contract "${name}" has been added to rindexer.yaml and ABI saved to ${abiPath}`,
-			};
-		} catch (error: any) {
-			console.error("Error adding contract:", error);
+			return { success: true, results };
+		} catch (error) {
+			const errorMessage =
+				error instanceof Error ? error.message : "Unknown error occurred";
+			console.error("Error adding contracts batch:", errorMessage);
 			return {
 				success: false,
-				error: error.message || "Failed to add contract",
+				results: [],
+				error: `Failed to add contracts: ${errorMessage}`,
 			};
 		}
 	},
 );
 
-// Ruta base
+// Health check endpoint
 app.get("/", () => "Hello Elysia");
 
-// Iniciar servidor
-app.listen(3000, () => {
+// Start the server
+app.listen(APP_CONSTANTS.SERVER_PORT, () => {
 	console.log(
-		`🦊 Elysia is running at ${app.server?.hostname}:${app.server?.port}`,
+		`🦊 Elysia is running at http://${app.server?.hostname}:${app.server?.port}`,
 	);
 });

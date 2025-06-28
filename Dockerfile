@@ -8,4 +8,7 @@ RUN apt-get update \
 
 RUN curl -fsSL https://bun.sh/install | bash
 
+# Add bun to PATH
+ENV PATH="/root/.bun/bin:$PATH"
+
 ENTRYPOINT []
