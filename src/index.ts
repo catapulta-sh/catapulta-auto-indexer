@@ -1,8 +1,6 @@
 import { Elysia } from "elysia";
-import {
-	type AddContractsRequest,
-	type BatchApiResponse,
-} from "./types.js";
+import { cors } from "@elysiajs/cors";
+import { type AddContractsRequest, type BatchApiResponse } from "./types.js";
 import {
 	APP_CONSTANTS,
 	loadRindexerConfig,
@@ -17,11 +15,12 @@ import {
 	processContractBatch,
 	getProjectName,
 	toSnakeCase,
+	getCorsOrigins,
 } from "./helpers.js";
 
 /**
  * Rindexer API Server
- * 
+ *
  * Provides REST endpoints for managing blockchain contract indexing and event querying.
  * Requires a valid rindexer.yaml configuration file to start.
  */
@@ -43,21 +42,30 @@ const client = createDatabaseClient();
 await connectDatabase(client);
 initializeRindexerProcess();
 
-const app = new Elysia();
+const app = new Elysia().use(
+	cors({
+		origin: getCorsOrigins(),
+		methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+		allowedHeaders: ["Content-Type", "Authorization"],
+		credentials: true,
+	}),
+);
 
 /**
  * GET /event-list
- * 
+ *
  * Returns all available event table names for a specific contract.
  * Uses a composite key (contract_name + report_id) to look up the internal indexer_id.
- * 
+ *
  * @query contract_name - The contract identifier
  * @query report_id - The report identifier for this contract instance
  * @returns Array of event table names and the indexer_id
  */
 app.get(
 	"/event-list",
-	async ({ query }: { query: { contract_name: string; report_id: string } }) => {
+	async ({
+		query,
+	}: { query: { contract_name: string; report_id: string } }) => {
 		const { contract_name, report_id } = query;
 
 		try {
@@ -75,7 +83,7 @@ app.get(
 					error: `Contract "${nameUuid}" not found`,
 					contract_name,
 					report_id,
-					events: []
+					events: [],
 				};
 			}
 
@@ -92,11 +100,11 @@ app.get(
 				[schema_name],
 			);
 
-			const events = tablesResult.rows.map(row => row.table_name);
+			const events = tablesResult.rows.map((row) => row.table_name);
 
 			return {
 				events,
-				indexer_id: indexerId
+				indexer_id: indexerId,
 			};
 		} catch (error) {
 			console.error("Error in /event-list:", error);
@@ -104,7 +112,7 @@ app.get(
 				error: "Failed to retrieve event list",
 				contract_name,
 				report_id,
-				events: []
+				events: [],
 			};
 		}
 	},
@@ -112,9 +120,9 @@ app.get(
 
 /**
  * GET /events
- * 
+ *
  * Retrieves all events of a specific type for a contract, ordered by block number and log index.
- * 
+ *
  * @query indexer_id - Internal indexer identifier (obtained from /event-list)
  * @query event_name - Name of the event table to query
  * @query sort_order - Optional sort direction: 1 for ASC, -1 for DESC (default: -1)
@@ -131,11 +139,7 @@ app.get(
 			sort_order?: number;
 		};
 	}) => {
-		const {
-			indexer_id,
-			event_name,
-			sort_order = -1,
-		} = query;
+		const { indexer_id, event_name, sort_order = -1 } = query;
 
 		try {
 			const projectName = await getProjectName();
@@ -156,7 +160,7 @@ app.get(
 					error: `Event "${event_name}" not found in schema "${schema_name}"`,
 					indexer_id,
 					event_name,
-					events: []
+					events: [],
 				};
 			}
 
@@ -169,7 +173,7 @@ app.get(
 			);
 
 			return {
-				events: result.rows
+				events: result.rows,
 			};
 		} catch (error) {
 			console.error("Error in /events:", error);
@@ -177,7 +181,7 @@ app.get(
 				error: "Failed to retrieve events",
 				indexer_id,
 				event_name,
-				events: []
+				events: [],
 			};
 		}
 	},
@@ -185,9 +189,9 @@ app.get(
 
 /**
  * POST /graphql
- * 
+ *
  * Proxy endpoint for GraphQL queries. Forwards requests to the internal GraphQL server.
- * 
+ *
  * @body GraphQL query object with required 'query' field
  * @returns GraphQL response or error
  */
@@ -212,10 +216,10 @@ app.post("/graphql", async ({ request }) => {
 
 /**
  * POST /add-contracts
- * 
+ *
  * Batch endpoint for adding multiple contracts to the indexer.
  * Validates contracts, updates configuration, writes ABI files, and restarts the indexer process.
- * 
+ *
  * @body AddContractsRequest - Array of contract configurations to add
  * @returns BatchApiResponse with success status and individual contract results
  */
@@ -242,8 +246,7 @@ app.post(
 			}
 
 			// Prepare configuration data (handles deduplication of contracts and ABIs)
-			const { contracts, abiFiles } =
-				prepareContractBatch(processedContracts);
+			const { contracts, abiFiles } = prepareContractBatch(processedContracts);
 
 			// Apply changes: update config file and write ABI files
 			await updateRindexerConfig(contracts);
