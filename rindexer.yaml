@@ -1,12 +1,177 @@
 name: CatapultaAutoIndexer
 project_type: no-code
 networks:
-  - name: ethereum
+  - name: matic
+    chain_id: 137
+    rpc: ${MATIC_ENDPOINT}
+  - name: maticMumbai
+    chain_id: 80001
+    rpc: ${MATICMUMBAI_ENDPOINT}
+  - name: polygonAmoy
+    chain_id: 80002
+    rpc: ${POLYGONAMOY_ENDPOINT}
+  - name: main
     chain_id: 1
-    rpc: https://mainnet.gateway.tenderly.co
+    rpc: ${MAIN_ENDPOINT}
+  - name: arbitrum
+    chain_id: 42161
+    rpc: ${ARBITRUM_ENDPOINT}
+  - name: arbitrumGoerli
+    chain_id: 421613
+    rpc: ${ARBITRUMGOERLI_ENDPOINT}
+  - name: arbitrumSepolia
+    chain_id: 421614
+    rpc: ${ARBITRUMSEPOLIA_ENDPOINT}
+  - name: avalanche
+    chain_id: 43114
+    rpc: ${AVALANCHE_ENDPOINT}
+  - name: avalancheFuji
+    chain_id: 43113
+    rpc: ${AVALANCHEFUJI_ENDPOINT}
+  - name: optimism
+    chain_id: 10
+    rpc: ${OPTIMISM_ENDPOINT}
+  - name: optimismGoerli
+    chain_id: 420
+    rpc: ${OPTIMISMGOERLI_ENDPOINT}
+  - name: optimismSepolia
+    chain_id: 11155420
+    rpc: ${OPTIMISMSEPOLIA_ENDPOINT}
+  - name: goerli
+    chain_id: 5
+    rpc: ${GOERLI_ENDPOINT}
   - name: sepolia
     chain_id: 11155111
-    rpc: https://sepolia.infura.io/v3/${INFURA_API_KEY}
+    rpc: ${SEPOLIA_ENDPOINT}
+  - name: base
+    chain_id: 8453
+    rpc: ${BASE_ENDPOINT}
+  - name: baseTestnet
+    chain_id: 84531
+    rpc: ${BASETESTNET_ENDPOINT}
+  - name: baseSepolia
+    chain_id: 84532
+    rpc: ${BASESEPOLIA_ENDPOINT}
+  - name: bsc
+    chain_id: 56
+    rpc: ${BSC_ENDPOINT}
+  - name: bscTestnet
+    chain_id: 97
+    rpc: ${BSCTESTNET_ENDPOINT}
+  - name: gnosis
+    chain_id: 100
+    rpc: ${GNOSIS_ENDPOINT}
+  - name: gnosisTestnet
+    chain_id: 10200
+    rpc: ${GNOSISTESTNET_ENDPOINT}
+  - name: scroll
+    chain_id: 534352
+    rpc: ${SCROLL_ENDPOINT}
+  - name: scrollSepolia
+    chain_id: 534351
+    rpc: ${SCROLLSEPOLIA_ENDPOINT}
+  - name: metis
+    chain_id: 1088
+    rpc: ${METIS_ENDPOINT}
+  - name: metisTestnet
+    chain_id: 599
+    rpc: ${METISTESTNET_ENDPOINT}
+  - name: zksyncEraMainnet
+    chain_id: 324
+    rpc: ${ZKSYNCERAMAINNET_ENDPOINT}
+  - name: zksyncEraTestnet
+    chain_id: 280
+    rpc: ${ZKSYNCERATESTNET_ENDPOINT}
+  - name: zksyncSepolia
+    chain_id: 300
+    rpc: ${ZKSYNCSEPOLIA_ENDPOINT}
+  - name: polygonZkEvm
+    chain_id: 1101
+    rpc: ${POLYGONZKEVM_ENDPOINT}
+  - name: polygonZkEvmTestnet
+    chain_id: 1442
+    rpc: ${POLYGONZKEVMTESTNET_ENDPOINT}
+  - name: stavenger
+    chain_id: 686669576
+    rpc: ${STAVENGER_ENDPOINT}
+  - name: zKatana
+    chain_id: 1261120
+    rpc: ${ZKATANA_ENDPOINT}
+  - name: blastSepolia
+    chain_id: 168587773
+    rpc: ${BLASTSEPOLIA_ENDPOINT}
+  - name: blast
+    chain_id: 81457
+    rpc: ${BLAST_ENDPOINT}
+  - name: holesky
+    chain_id: 17000
+    rpc: ${HOLESKY_ENDPOINT}
+  - name: fantom
+    chain_id: 250
+    rpc: ${FANTOM_ENDPOINT}
+  - name: fantomTestnet
+    chain_id: 4002
+    rpc: ${FANTOMTESTNET_ENDPOINT}
+  - name: celo
+    chain_id: 42220
+    rpc: ${CELO_ENDPOINT}
+  - name: moonbeam
+    chain_id: 1284
+    rpc: ${MOONBEAM_ENDPOINT}
+  - name: moonbeamTestnet
+    chain_id: 1287
+    rpc: ${MOONBEAMTESTNET_ENDPOINT}
+  - name: kroma
+    chain_id: 255
+    rpc: ${KROMA_ENDPOINT}
+  - name: kromaSepolia
+    chain_id: 2358
+    rpc: ${KROMASEPOLIA_ENDPOINT}
+  - name: mantle
+    chain_id: 5000
+    rpc: ${MANTLE_ENDPOINT}
+  - name: mantleSepolia
+    chain_id: 5003
+    rpc: ${MANTLESEPOLIA_ENDPOINT}
+  - name: zeeveDemo
+    chain_id: 1234
+    rpc: ${ZEEVEDEMO_ENDPOINT}
+  - name: degen
+    chain_id: 666666666
+    rpc: ${DEGEN_ENDPOINT}
+  - name: bartio
+    chain_id: 80084
+    rpc: ${BARTIO_ENDPOINT}
+  - name: mode
+    chain_id: 34443
+    rpc: ${MODE_ENDPOINT}
+  - name: modeTestnet
+    chain_id: 919
+    rpc: ${MODETESTNET_ENDPOINT}
+  - name: monadTestnet
+    chain_id: 10143
+    rpc: ${MONADTESTNET_ENDPOINT}
+  - name: unichainTestnet
+    chain_id: 1301
+    rpc: ${UNICHAINTESTNET_ENDPOINT}
+  - name: ink
+    chain_id: 57073
+    rpc: ${INK_ENDPOINT}
+  - name: inkTestnet
+    chain_id: 763373
+    rpc: ${INKTESTNET_ENDPOINT}
+  - name: corn
+    chain_id: 21000000
+    rpc: ${CORN_ENDPOINT}
+  - name: cornTestnet
+    chain_id: 21000001
+    rpc: ${CORNTESTNET_ENDPOINT}
+  - name: hyperliquidEVM
+    chain_id: 999
+    rpc: ${HYPERLIQUIDEVM_ENDPOINT}
+  - name: hyperliquidEVMTestnet
+    chain_id: 998
+    rpc: ${HYPERLIQUIDEVMTESTNET_ENDPOINT}
 storage:
   postgres:
     enabled: true
