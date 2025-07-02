@@ -8,7 +8,7 @@ This project provides a REST and GraphQL API built with [Elysia](https://elysiaj
 
 * Automatic indexing of events from deployed contracts
 * Query events by contract and event type
-* Pagination, sorting and filtering support
+* Sorting support for event data
 * Proxy to Rindexer's GraphQL service
 * Add new contracts and dynamically restart the indexer
 * Swagger documentation available at `/docs`
@@ -38,7 +38,9 @@ POSTGRES_USER=postgres
 POSTGRES_PASSWORD=yourpassword
 POSTGRES_DB=postgres
 
+# Keys to interact with each network
 INFURA_API_KEY=your_infura_key
+...
 ```
 
 ---
@@ -75,8 +77,8 @@ This will launch:
 
 | Method | Path             | Description                                                     |
 | ------ | ---------------- | --------------------------------------------------------------- |
-| GET    | `/event-list`    | Lists all event types indexed for a specific contract address   |
-| GET    | `/events`        | Returns paginated events for a contract and specific event name |
+| GET    | `/event-list`    | Lists all event types indexed for a specific contract using composite key (contract_name + report_id) |
+| GET    | `/events`        | Returns all events for a contract and specific event name, ordered by block number |
 | POST   | `/graphql`       | Proxy to Rindexer's GraphQL service                             |
 | POST   | `/add-contracts` | Adds contracts to `rindexer.yaml` and restarts the indexer      |
 | GET    | `/`              | Basic test route (Hello Elysia)                                 |
@@ -92,13 +94,38 @@ This will launch:
 ### `GET /event-list`
 
 ```http
-GET /event-list?contract_address=0xABC123...
+GET /event-list?contract_name=MyContract&report_id=abc123
 ```
+
+**Response:**
+```json
+{
+  "events": ["Transfer", "Approval", "Mint"],
+  "indexer_id": "internal_id_123"
+}
+```
+
 ### `GET /events`
 
-````http
-GET /events?contract_address=0xABC123...&event_name=Transfer&page_length=10&page=1&sort_order=1&offset=0
-````
+```http
+GET /events?indexer_id=internal_id_123&event_name=Transfer&sort_order=-1
+```
+
+**Response:**
+```json
+{
+  "events": [
+    {
+      "block_number": 18500000,
+      "log_index": 25,
+      "transaction_hash": "0xabc123...",
+      "from": "0x123...",
+      "to": "0x456...",
+      "value": "1000000000000000000"
+    }
+  ]
+}
+```
 
 ### `POST /graphql`
 
@@ -115,7 +142,7 @@ GET /events?contract_address=0xABC123...&event_name=Transfer&page_length=10&page
   "contracts": [
     {
       "name": "MyContract",
-      "id": "001",
+      "report_id": "abc123",
       "network": "ethereum",
       "address": "0xABC123...",
       "start_block": "20000000",
