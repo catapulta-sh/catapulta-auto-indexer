@@ -8,6 +8,7 @@ services:
     shm_size: 1g
     restart: always
     volumes:
+      - ./pg-init:/docker-entrypoint-initdb.d
       - postgres_data:/var/lib/postgresql/data
     ports:
       - 5440:5432
@@ -24,7 +25,7 @@ services:
       - 3000:3000
     depends_on:
       - postgresql
-    command: bash -c "bun run dev"
     init: true
+    command: bash -c "bun run dev"
     env_file:
       - .env

@@ -1,4 +1,3 @@
-// More specific ABI types
 export interface AbiItem {
 	type: "function" | "event" | "constructor" | "fallback" | "receive";
 	name?: string;
@@ -16,15 +15,13 @@ export interface AbiItem {
 }
 
 export type ContractAbi = AbiItem[];
-
-// Contract-related interfaces
 export interface AddContractRequest {
 	name: string;
+	report_id: string;
 	network: string;
 	address: string;
 	start_block: string;
 	abi: ContractAbi | string;
-	id: string;
 }
 
 export interface RindexerContract {
@@ -38,11 +35,16 @@ export interface RindexerContract {
 }
 
 export interface RindexerConfig {
+	name?: string;
 	contracts?: RindexerContract[];
+	storage?: {
+		postgres?: {
+			enabled?: boolean;
+		};
+	};
 	[key: string]: any;
 }
 
-// API-related interfaces
 export interface AddContractsRequest {
 	contracts: AddContractRequest[];
 }
@@ -56,4 +58,38 @@ export interface BatchApiResponse {
 		error?: string;
 	}>;
 	error?: string;
+}
+
+export class RindexerConfigError extends Error {
+	constructor(message: string) {
+		super(message);
+		this.name = "RindexerConfigError";
+	}
+}
+
+export class ProjectNameMissingError extends RindexerConfigError {
+	constructor() {
+		super(
+			"No 'name' field found in rindexer.yaml. This is required for the service to start.",
+		);
+		this.name = "ProjectNameMissingError";
+	}
+}
+
+export class ProjectNameTooLongError extends RindexerConfigError {
+	constructor(projectName: string, maxLength: number = 32) {
+		super(
+			`Project name '${projectName}' is too long. Maximum length is ${maxLength} characters.`,
+		);
+		this.name = "ProjectNameTooLongError";
+	}
+}
+
+export class PostgresNotEnabledError extends RindexerConfigError {
+	constructor() {
+		super(
+			"PostgreSQL storage is not enabled in rindexer.yaml. Please set 'storage.postgres.enabled' to true.",
+		);
+		this.name = "PostgresNotEnabledError";
+	}
 }
