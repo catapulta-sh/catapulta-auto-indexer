@@ -221,6 +221,29 @@ export async function loadRindexerConfig(): Promise<{
 				"PostgreSQL must be enabled in rindexer.yaml configuration",
 			);
 		}
+		// Validate that all network RPC endpoints are configured in environment variables
+		if (config.networks) {
+			const missingEndpoints: string[] = [];
+			
+			for (const network of config.networks) {
+				if (network.rpc) {
+					// Extract environment variable name from ${VAR_NAME} format
+					const envVarMatch = network.rpc.match(/^\$\{([^}]+)\}$/);
+					if (envVarMatch) {
+						const envVarName = envVarMatch[1];
+						if (!process.env[envVarName]) {
+							missingEndpoints.push(`${envVarName} (for network: ${network.name})`);
+						}
+					}
+				}
+			}
+
+			if (missingEndpoints.length > 0) {
+				throw new Error(
+					`Missing environment variables for network RPC endpoints:\n${missingEndpoints.map(endpoint => `  - ${endpoint}`).join('\n')}\n\nPlease add these to your .env file.`
+				);
+			}
+		}
 
 		return { projectName: config.name, config };
 	} catch (error) {
