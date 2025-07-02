@@ -1,327 +1,336 @@
-import { Elysia } from "elysia";
-import { swagger } from "@elysiajs/swagger"
-import { Client } from "pg";
-import { type Subprocess } from "bun";
-import * as fs from "fs-extra";
-import * as yaml from "js-yaml";
-import { t } from "elysia";
-
+import { Elysia, t } from "elysia";
+import { cors } from "@elysiajs/cors";
+import { swagger } from '@elysiajs/swagger'
+import { type AddContractsRequest, type BatchApiResponse } from "./types.js";
 import {
-	type AddContractsRequest,
-	type BatchApiResponse,
-	type RindexerConfig,
-} from "./types.js";
-import {
+	APP_CONSTANTS,
+	loadRindexerConfig,
+	createDatabaseClient,
+	connectDatabase,
+	initializeRindexerProcess,
+	restartRindexerProcess,
 	validateBatchRequest,
-	validateContract,
-	processContract,
-	updateRindexerConfig,
 	writeAbiFiles,
-} from "./contract-helpers.js";
+	prepareContractBatch,
+	updateRindexerConfig,
+	processContractBatch,
+	getProjectName,
+	toSnakeCase,
+	getCorsOrigins,
+} from "./helpers.js";
 
-let globalProcess: Subprocess | undefined;
+/**
+ * Rindexer API Server
+ *
+ * Provides REST endpoints for managing blockchain contract indexing and event querying.
+ * Requires a valid rindexer.yaml configuration file to start.
+ */
 
-const startRindexerProcess = () => {
-	console.log("Spawning rindexer process: rindexer start all");
-	const proc = Bun.spawn({
-		cmd: ["/app/rindexer", "start", "all"],
-		stdout: "inherit",
-		stderr: "inherit",
-		onExit: (proc, exitCode, signalCode, error) => {
-			console.log(
-				`Rindexer process exited with code: ${exitCode}, signal: ${signalCode}`,
-			);
-			if (error) {
-				console.error("Rindexer process error on exit:", error);
-			}
-			// Clean up the global reference when process exits
-			if (globalProcess === proc) {
-				globalProcess = undefined;
-			}
+// Startup: Validate and load configuration
+try {
+	await loadRindexerConfig();
+	console.log("✅ Configuration loaded successfully");
+} catch (error) {
+	console.error("❌", error instanceof Error ? error.message : error);
+	console.error(
+		"   The service cannot start without a valid rindexer.yaml configuration file.",
+	);
+	process.exit(1);
+}
+
+// Startup: Establish database connection and initialize rindexer
+const client = createDatabaseClient();
+await connectDatabase(client);
+initializeRindexerProcess();
+
+const app = new Elysia().use(
+	cors({
+		origin: getCorsOrigins(),
+		methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+		allowedHeaders: ["Content-Type", "Authorization"],
+		credentials: true,
+	}),
+).use(swagger({
+	path: "/docs",
+	documentation: {
+		info: {
+			title: "Catapulta Auto Indexer API",
+			version: "1.0.0",
+			description: "Public REST API Documentation for Rindexer",
 		},
-	});
-	return proc;
-};
+		tags: [
+			{ name: 'Events', description: 'Event querying endpoints' },
+			{ name: 'Contracts', description: 'Contract management endpoints' },
+			{ name: 'GraphQL', description: 'GraphQL proxy endpoint' },
+			{ name: 'Health', description: 'Health check endpoints' }
+		]
+	},
+}));
 
-const app = new Elysia();
-
-// PostgreSQL Configuration
-const client = new Client({
-	host: process.env.POSTGRES_HOST || "localhost",
-	port: Number(process.env.POSTGRES_PORT) || 5432,
-	user: process.env.POSTGRES_USER || "postgres",
-	password: process.env.POSTGRES_PASSWORD || "password",
-	database: process.env.POSTGRES_DB || "postgres",
-});
-
-await client.connect();
-
-// Start the rindexer process initially
-globalProcess = startRindexerProcess();
-
-// GET /event-list
+/**
+ * GET /event-list
+ *
+ * Returns all available event table names for a specific contract.
+ * Uses a composite key (contract_name + report_id) to look up the internal indexer_id.
+ *
+ * @query contract_name - The contract name
+ * @query report_id - The report identifier for this contract instance
+ * @returns Array of event table names and the indexer_id
+ */
 app.get(
-  "/event-list",
-  async ({ query }) => {
-    const address = query.contract_address.toLowerCase();
-    const schema = "catapulta_auto_indexer_rocket_pool_eth";
+	"/event-list",
+	async ({
+		query,
+	}: { query: { contract_name: string; report_id: string } }) => {
+		const { contract_name, report_id } = query;
 
-    const result = await client.query<{ table_name: string }>(
-      `SELECT table_name FROM information_schema.tables WHERE table_schema = $1`,
-      [schema]
-    );
+		try {
+			// Create composite key for contract lookup
+			const nameUuid = `${contract_name}_${report_id}`;
 
-    const eventTables = result.rows.map((r) => r.table_name);
-    const events: string[] = [];
+			// Resolve the internal indexer_id from the mapping table
+			const mappingResult = await client.query<{ indexer_id: string }>(
+				"SELECT indexer_id FROM name_uuid_indexer_id_mapping WHERE name_uuid = $1",
+				[nameUuid],
+			);
 
-    for (const table of eventTables) {
-      const result = await client.query<{ has_event: boolean }>(
-        `SELECT EXISTS (
-          SELECT 1 FROM ${schema}."${table}"
-          WHERE LOWER(contract_address) = $1
-          LIMIT 1
-        ) AS has_event`,
-        [address]
-      );
-      if (result.rows[0]?.has_event) events.push(table);
-    }
+			if (mappingResult.rows.length === 0) {
+				return {
+					error: `Contract "${nameUuid}" not found`,
+					contract_name,
+					report_id,
+					events: [],
+				};
+			}
 
-    return { events };
-  },
-  {
-    query: t.Object({
-      contract_address: t.String(),
-    }),
-    response: t.Object({
-      events: t.Array(t.String()),
-    }),
-    detail: {
-      summary: "List the available events for a contract",
-      tags: ["Events"],
-    },
-  }
+			const indexerId = mappingResult.rows[0].indexer_id;
+			const projectName = await getProjectName();
+			// Schema naming follows convention: {project_name}_{indexer_id}
+			const schema_name = `${toSnakeCase(projectName)}_${indexerId}`;
+
+			// Query all tables in the contract's schema (each table represents an event type)
+			const tablesResult = await client.query<{ table_name: string }>(
+				`SELECT table_name 
+                 FROM information_schema.tables 
+                 WHERE table_schema = $1`,
+				[schema_name],
+			);
+
+			const events = tablesResult.rows.map((row) => row.table_name);
+
+			return {
+				events,
+				indexer_id: indexerId,
+			};
+		} catch (error) {
+			console.error("Error in /event-list:", error);
+			return {
+				error: "Failed to retrieve event list",
+				contract_name,
+				report_id,
+				events: [],
+			};
+		}
+	},
+	{
+		query: t.Object({
+			contract_name: t.String({ description: "The contract name" }),
+			report_id: t.String({ description: "The report identifier for this contract instance" })
+		}),
+		response: {
+			200: t.Object({
+				events: t.Array(t.String(), { description: "List of event table names" }),
+				indexer_id: t.String({ description: "Internal indexer identifier" })
+			}),
+			400: t.Object({
+				error: t.String(),
+				contract_name: t.String(),
+				report_id: t.String(),
+				events: t.Array(t.String())
+			})
+		},
+		detail: {
+			summary: "Get available event names for a contract",
+			tags: ["Events"],
+		}
+	},
+);
+
+/**
+ * GET /events
+ *
+ * Retrieves all events of a specific type for a contract, ordered by block number and log index.
+ *
+ * @query indexer_id - Internal indexer identifier (obtained from /event-list)
+ * @query event_name - Name of the event table to query
+ * @query sort_order - Optional sort direction: 1 for ASC, -1 for DESC (default: -1)
+ * @returns Array of event records with all their fields
+ */
+app.get(
+	"/events",
+	async ({
+		query,
+	}: {
+		query: {
+			indexer_id: string;
+			event_name: string;
+			sort_order?: number;
+		};
+	}) => {
+		const { indexer_id, event_name, sort_order = -1 } = query;
+
+		try {
+			const projectName = await getProjectName();
+			const schema_name = `${toSnakeCase(projectName)}_${indexer_id}`;
+
+			// Verify the event table exists in the schema
+			const tableExistsResult = await client.query<{ exists: boolean }>(
+				`SELECT EXISTS (
+                    SELECT 1 
+                    FROM information_schema.tables 
+                    WHERE table_schema = $1 AND table_name = $2
+                ) AS exists`,
+				[schema_name, event_name],
+			);
+
+			if (!tableExistsResult.rows[0]?.exists) {
+				return {
+					error: `Event "${event_name}" not found in schema "${schema_name}"`,
+					indexer_id,
+					event_name,
+					events: [],
+				};
+			}
+
+			// Order by blockchain natural ordering: block number, then log index
+			const order = sort_order === 1 ? "ASC" : "DESC";
+
+			const result = await client.query(
+				`SELECT * FROM ${schema_name}."${event_name}"
+                 ORDER BY block_number ${order}, log_index ${order}`,
+			);
+
+			return {
+				events: result.rows,
+			};
+		} catch (error) {
+			console.error("Error in /events:", error);
+			return {
+				error: "Failed to retrieve events",
+				indexer_id,
+				event_name,
+				events: [],
+			};
+		}
+	},
+	{
+		query: t.Object({
+			indexer_id: t.String({ description: "Internal indexer identifier (obtained from /event-list)" }),
+			event_name: t.String({ description: "Name of the event table to query" }),
+			sort_order: t.Optional(t.Number({ description: "Sort direction: 1 for ASC, -1 for DESC", default: -1 }))
+		}),
+		response: {
+			200: t.Object({
+				events: t.Array(t.Any(), { description: "Array of event records with all their fields" })
+			}),
+			400: t.Object({
+				error: t.String(),
+				indexer_id: t.String(),
+				event_name: t.String(),
+				events: t.Array(t.Any())
+			})
+		},
+		detail: {
+			summary: "Get contract events by type",
+			tags: ["Events"],
+		}
+	},
 );
 
 
-app.get(
-  "/events",
-  async ({ query }) => {
-    const {
-      contract_address,
-      event_name,
-      page_length,
-      page,
-      sort_order,
-      offset,
-    } = query;
-
-    const schema = "catapulta_auto_indexer_rocket_pool_eth";
-    const table = event_name.toLowerCase();
-    const address = contract_address.toLowerCase();
-
-    const skip = offset || (page - 1) * page_length;
-    const order = sort_order === 1 ? "ASC" : "DESC";
-
-    const result = await client.query(
-      `
-      SELECT * FROM ${schema}."${table}"
-      WHERE LOWER(contract_address) = $1
-      ORDER BY block_number ${order}
-      LIMIT $2 OFFSET $3
-    `,
-      [address, page_length, skip]
-    );
-
-    return {
-      events: result.rows,
-    };
-  },
-  {
-    query: t.Object({
-      contract_address: t.String(),
-      event_name: t.String(),
-      page_length: t.Number(),
-      page: t.Number(),
-      sort_order: t.Number(), // 1 = ASC, -1 = DESC
-      offset: t.Number(),
-    }),
-    response: t.Object({
-      events: t.Array(t.Any()),
-    }),
-    detail: {
-      summary: "Paginated contract events by type",
-      tags: ["Events"],
-    },
-  }
-);
-
-
-// Proxy a graphql
-app.post("/graphql", async (ctx: { request: Request }) => {
-	const { request } = ctx;
-	const body = await request.json();
-
+/**
+ * POST /graphql
+ *
+ * Proxy endpoint for GraphQL queries. Forwards requests to the internal GraphQL server.
+ *
+ * @body GraphQL query object with required 'query' field
+ * @returns GraphQL response or error
+ */
+app.post("/graphql", async ({ body }: { body: { query: string; variables?: any; operationName?: string } }) => {
 	if (!body?.query) {
 		return { error: 'The field "query" is required.' };
 	}
 
-	const response = await fetch("http://localhost:3001/graphql", {
-		method: "POST",
-		headers: {
-			"Content-Type": "application/json",
+	const response = await fetch(
+		`http://localhost:${APP_CONSTANTS.GRAPHQL_PORT}/graphql`,
+		{
+			method: "POST",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify(body),
 		},
-		body: JSON.stringify(body),
-	});
+	);
 
 	return await response.json();
 },{
-    body: t.Object({
-      query: t.String(),
-      variables: t.Optional(t.Record(t.String(), t.Any())),
-    }),
-    response: t.Unknown(),
-    detail: {
-      summary: "Proxy to Rindexer's GraphQL",
-      tags: ["GraphQL"],
-    },
-  }
-
-);
-
-// Helper functions for batch operations
-const restartRindexerProcess = async (): Promise<void> => {
-	if (globalProcess) {
-		console.log("Terminating existing rindexer process...");
-
-		// Try graceful termination first
-		globalProcess.kill("SIGTERM");
-
-		// Wait a bit for graceful shutdown
-		const timeout = setTimeout(() => {
-			console.log("Force killing rindexer process...");
-			globalProcess?.kill("SIGKILL");
-		}, 5000);
-
-		try {
-			await globalProcess.exited;
-			clearTimeout(timeout);
-			console.log("Rindexer process terminated successfully");
-		} catch (error) {
-			console.error("Error waiting for process termination:", error);
-		}
-
-		globalProcess = undefined;
+	body: t.Object({
+		query: t.String({ description: "GraphQL query string" }),
+		variables: t.Optional(t.Any({ description: "GraphQL variables object" })),
+		operationName: t.Optional(t.String({ description: "GraphQL operation name" }))
+	}),
+	response: {
+		200: t.Any({ description: "GraphQL response" }),
+		400: t.Object({
+			error: t.String()
+		})
+	},
+	detail: {
+		summary: "Proxy to Rindexer's GraphQL",
+		tags: ["GraphQL"],
 	}
+});
 
-	// Wait a moment before starting new process
-	await new Promise((resolve) => setTimeout(resolve, 1000));
-	globalProcess = startRindexerProcess();
-};
-
-// Batch add contracts endpoint
+/**
+ * POST /add-contracts
+ *
+ * Batch endpoint for adding multiple contracts to the indexer.
+ * Validates contracts, updates configuration, writes ABI files, and restarts the indexer process.
+ *
+ * @body AddContractsRequest - Array of contract configurations to add
+ * @returns BatchApiResponse with success status and individual contract results
+ */
 app.post(
 	"/add-contracts",
 	async ({
 		body,
 	}: { body: AddContractsRequest }): Promise<BatchApiResponse> => {
 		try {
-			// 1. Validate batch request
+			// Validate the entire batch request structure
 			const batchError = validateBatchRequest(body);
 			if (batchError) {
 				return { success: false, results: [], error: batchError };
 			}
 
-			const { contracts } = body;
-			const results: BatchApiResponse["results"] = [];
-			const validContracts: ReturnType<typeof processContract>[] = [];
+			// Process and validate each contract individually
+			const { results, processedContracts } = await processContractBatch(
+				body.contracts,
+				client,
+			);
 
-			// 2. Process and validate each contract
-			for (const contract of contracts) {
-				const contractName = `${contract.name}_${contract.id}`;
-				const validationError = validateContract(contract);
-
-				if (validationError) {
-					results.push({
-						contract: contractName,
-						success: false,
-						error: validationError,
-					});
-					continue;
-				}
-
-				try {
-					const processed = processContract(contract);
-					validContracts.push(processed);
-					results.push({
-						contract: contractName,
-						success: true,
-						message: "Validated successfully",
-					});
-				} catch (error) {
-					results.push({
-						contract: contractName,
-						success: false,
-						error:
-							error instanceof Error ? error.message : "Invalid ABI format",
-					});
-				}
-			}
-
-			if (validContracts.length === 0) {
+			if (processedContracts.length === 0) {
 				return { success: false, results, error: "No valid contracts to add." };
 			}
 
-			// 3. Read existing config to identify replacements
-			const configPath = "/workspace/rindexer.yaml";
-			let existingConfig: RindexerConfig = { contracts: [] };
-			try {
-				const content = await fs.readFile(configPath, "utf8");
-				existingConfig = yaml.load(content) as RindexerConfig;
-			} catch (error) {
-				// Config file doesn't exist or is invalid, use default
-			}
+			// Prepare configuration data (handles deduplication of contracts and ABIs)
+			const { contracts, abiFiles } = prepareContractBatch(processedContracts);
 
-			const existingContractNames = new Set(
-				(existingConfig.contracts || []).map((c) => c.name),
-			);
-
-			// 4. Deduplicate and prepare for updates
-			const contractMap = new Map();
-			const abiFileMap = new Map();
-			const duplicateContracts = new Set();
-			const replacedContracts = new Set();
-
-			for (const contract of validContracts) {
-				if (contractMap.has(contract.contractName)) {
-					duplicateContracts.add(contract.contractName);
-				}
-				if (existingContractNames.has(contract.contractName)) {
-					replacedContracts.add(contract.contractName);
-				}
-				contractMap.set(contract.contractName, contract.rindexerContract);
-				abiFileMap.set(contract.contractName, contract.abiFile);
-			}
-
-			const uniqueContracts = Array.from(contractMap.values());
-			const abiFiles = Array.from(abiFileMap.values());
-			const contractNames = Array.from(contractMap.keys());
-
-			// 5. Update configuration and write files
-			await updateRindexerConfig(uniqueContracts, contractNames);
+			// Apply changes: update config file and write ABI files
+			await updateRindexerConfig(contracts);
 			await writeAbiFiles(abiFiles);
 
-			// 6. Restart process
+			// Restart the indexer to pick up new configuration
 			await restartRindexerProcess();
 
-			// 7. Update success messages
-			const finalResults = results.map((r) => ({
-				...r,
-				message: r.success
-					? `Contract "${r.contract}" ${replacedContracts.has(r.contract) ? "replaced" : "added"} successfully`
-					: r.message,
-			}));
-
-			return { success: true, results: finalResults };
+			return { success: true, results };
 		} catch (error) {
 			const errorMessage =
 				error instanceof Error ? error.message : "Unknown error occurred";
@@ -332,57 +341,58 @@ app.post(
 				error: `Failed to add contracts: ${errorMessage}`,
 			};
 		}
-	}, {
-    body: t.Object({
-      contracts: t.Array(
-        t.Object({
-          name: t.String(),
-          id: t.String(),
-          network: t.String(),
-          address: t.String(),
-          start_block: t.String(),
-          abi: t.Any(),
-        })
-      ),
-    }),
-    response: t.Object({
-      success: t.Boolean(),
-      error: t.Optional(t.String()),
-      results: t.Array(
-        t.Object({
-          contract: t.String(),
-          success: t.Boolean(),
-          message: t.Optional(t.String()),
-          error: t.Optional(t.String()),
-        })
-      ),
-    }),
-    detail: {
-      summary: "Add multiple contracts to Rindexer (batch)",
-      tags: ["Contracts"],
-    },
-  }
+	},
+	{
+		body: t.Object({
+			contracts: t.Array(t.Object({
+				name: t.String({ description: "Contract identifier" }),
+				report_id: t.String({ description: "Report identifier for this contract instance" }),
+				network: t.String({ description: "Blockchain network name" }),
+				address: t.String({ description: "Contract address" }),
+				start_block: t.String({ description: "Starting block number for indexing" }),
+				abi: t.Union([
+					t.String({ description: "ABI as JSON string" }),
+					t.Array(t.Any(), { description: "ABI as array of objects" })
+				], { description: "Contract ABI" })
+			}))
+		}),
+		response: {
+			200: t.Object({
+				success: t.Boolean(),
+				results: t.Array(t.Object({
+					contract: t.String(),
+					success: t.Boolean(),
+					message: t.Optional(t.String()),
+					error: t.Optional(t.String())
+				})),
+				error: t.Optional(t.String())
+			}),
+			400: t.Object({
+				success: t.Boolean(),
+				results: t.Array(t.Any()),
+				error: t.String()
+			})
+		},
+		detail: {
+			summary: "Add multiple contracts to Rindexer (batch)",
+			tags: ["Contracts"],
+		}
+	},
 );
 
-app.use(
-  swagger({
-    path: "/docs",
-    documentation: {
-      info: {
-        title: "Catapulta Auto Indexer API",
-        version: "1.0.0",
-        description: "Public REST API Documentation for Rindexer",
-      },
-    },
-  })
-);
+// Health check endpoint
+app.get("/", () => "Hello Elysia", {
+	detail: {
+		summary: "Health check",
+		tags: ["Health"],
+	}
+});
 
-// Ruta base
-app.get("/", () => "Hello Elysia");
 
-// Iniciar servidor
-app.listen(3000, () => {
+// Start the server
+app.listen(APP_CONSTANTS.SERVER_PORT, () => {
 	console.log(
-		`🦊 Elysia is running at ${app.server?.hostname}:${app.server?.port}`,
+		`🦊 Elysia is running at http://${app.server?.hostname}:${app.server?.port}`,
 	);
+	console.log(`View documentation at "${app.server!.url}docs" in your browser`);
 });
