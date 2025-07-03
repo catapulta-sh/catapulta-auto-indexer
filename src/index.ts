@@ -1,5 +1,6 @@
-import { Elysia } from "elysia";
+import { Elysia, t } from "elysia";
 import { cors } from "@elysiajs/cors";
+import { swagger } from '@elysiajs/swagger'
 import { type AddContractsRequest, type BatchApiResponse } from "./types.js";
 import {
 	APP_CONSTANTS,
@@ -49,7 +50,22 @@ const app = new Elysia().use(
 		allowedHeaders: ["Content-Type", "Authorization"],
 		credentials: true,
 	}),
-);
+).use(swagger({
+	path: "/docs",
+	documentation: {
+		info: {
+			title: "Catapulta Auto Indexer API",
+			version: "1.0.0",
+			description: "Public REST API Documentation for Rindexer",
+		},
+		tags: [
+			{ name: 'Events', description: 'Event querying endpoints' },
+			{ name: 'Contracts', description: 'Contract management endpoints' },
+			{ name: 'GraphQL', description: 'GraphQL proxy endpoint' },
+			{ name: 'Health', description: 'Health check endpoints' }
+		]
+	},
+}));
 
 /**
  * GET /event-list
@@ -57,7 +73,7 @@ const app = new Elysia().use(
  * Returns all available event table names for a specific contract.
  * Uses a composite key (contract_name + report_id) to look up the internal indexer_id.
  *
- * @query contract_name - The contract identifier
+ * @query contract_name - The contract name
  * @query report_id - The report identifier for this contract instance
  * @returns Array of event table names and the indexer_id
  */
@@ -114,6 +130,28 @@ app.get(
 				report_id,
 				events: [],
 			};
+		}
+	},
+	{
+		query: t.Object({
+			contract_name: t.String({ description: "The contract name" }),
+			report_id: t.String({ description: "The report identifier for this contract instance" })
+		}),
+		response: {
+			200: t.Object({
+				events: t.Array(t.String(), { description: "List of event table names" }),
+				indexer_id: t.String({ description: "Internal indexer identifier" })
+			}),
+			400: t.Object({
+				error: t.String(),
+				contract_name: t.String(),
+				report_id: t.String(),
+				events: t.Array(t.String())
+			})
+		},
+		detail: {
+			summary: "Get available event names for a contract",
+			tags: ["Events"],
 		}
 	},
 );
@@ -185,7 +223,30 @@ app.get(
 			};
 		}
 	},
+	{
+		query: t.Object({
+			indexer_id: t.String({ description: "Internal indexer identifier (obtained from /event-list)" }),
+			event_name: t.String({ description: "Name of the event table to query" }),
+			sort_order: t.Optional(t.Number({ description: "Sort direction: 1 for ASC, -1 for DESC", default: -1 }))
+		}),
+		response: {
+			200: t.Object({
+				events: t.Array(t.Any(), { description: "Array of event records with all their fields" })
+			}),
+			400: t.Object({
+				error: t.String(),
+				indexer_id: t.String(),
+				event_name: t.String(),
+				events: t.Array(t.Any())
+			})
+		},
+		detail: {
+			summary: "Get contract events by type",
+			tags: ["Events"],
+		}
+	},
 );
+
 
 /**
  * POST /graphql
@@ -195,9 +256,7 @@ app.get(
  * @body GraphQL query object with required 'query' field
  * @returns GraphQL response or error
  */
-app.post("/graphql", async ({ request }) => {
-	const body = await request.json();
-
+app.post("/graphql", async ({ body }: { body: { query: string; variables?: any; operationName?: string } }) => {
 	if (!body?.query) {
 		return { error: 'The field "query" is required.' };
 	}
@@ -212,6 +271,22 @@ app.post("/graphql", async ({ request }) => {
 	);
 
 	return await response.json();
+},{
+	body: t.Object({
+		query: t.String({ description: "GraphQL query string" }),
+		variables: t.Optional(t.Any({ description: "GraphQL variables object" })),
+		operationName: t.Optional(t.String({ description: "GraphQL operation name" }))
+	}),
+	response: {
+		200: t.Any({ description: "GraphQL response" }),
+		400: t.Object({
+			error: t.String()
+		})
+	},
+	detail: {
+		summary: "Proxy to Rindexer's GraphQL",
+		tags: ["GraphQL"],
+	}
 });
 
 /**
@@ -267,14 +342,57 @@ app.post(
 			};
 		}
 	},
+	{
+		body: t.Object({
+			contracts: t.Array(t.Object({
+				name: t.String({ description: "Contract identifier" }),
+				report_id: t.String({ description: "Report identifier for this contract instance" }),
+				network: t.String({ description: "Blockchain network name" }),
+				address: t.String({ description: "Contract address" }),
+				start_block: t.String({ description: "Starting block number for indexing" }),
+				abi: t.Union([
+					t.String({ description: "ABI as JSON string" }),
+					t.Array(t.Any(), { description: "ABI as array of objects" })
+				], { description: "Contract ABI" })
+			}))
+		}),
+		response: {
+			200: t.Object({
+				success: t.Boolean(),
+				results: t.Array(t.Object({
+					contract: t.String(),
+					success: t.Boolean(),
+					message: t.Optional(t.String()),
+					error: t.Optional(t.String())
+				})),
+				error: t.Optional(t.String())
+			}),
+			400: t.Object({
+				success: t.Boolean(),
+				results: t.Array(t.Any()),
+				error: t.String()
+			})
+		},
+		detail: {
+			summary: "Add multiple contracts to Rindexer (batch)",
+			tags: ["Contracts"],
+		}
+	},
 );
 
 // Health check endpoint
-app.get("/", () => "Hello Elysia");
+app.get("/", () => "Hello Elysia", {
+	detail: {
+		summary: "Health check",
+		tags: ["Health"],
+	}
+});
+
 
 // Start the server
 app.listen(APP_CONSTANTS.SERVER_PORT, () => {
 	console.log(
 		`🦊 Elysia is running at http://${app.server?.hostname}:${app.server?.port}`,
 	);
+	console.log(`View documentation at "${app.server!.url}docs" in your browser`);
 });
