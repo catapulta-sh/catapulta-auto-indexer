@@ -2,9 +2,13 @@ volumes:
   postgres_data:
     driver: local
 
+networks:
+  catapulta_indexer_network:
+
 services:
   postgresql:
     image: postgres:16
+    container_name: catapulta_indexer_postgresql
     shm_size: 1g
     restart: always
     volumes:
@@ -17,6 +21,7 @@ services:
 
   app:
     build: ../.
+    container_name: catapulta_indexer_backend
     volumes:
       - ../:/workspace
     working_dir: /workspace
@@ -26,3 +31,6 @@ services:
     command: sleep infinity
     env_file:
       - ../.env
+    networks:
+      - default
+      - catapulta_indexer_network

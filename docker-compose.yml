@@ -1,8 +1,19 @@
-volumes:
-  postgres_data:
-    driver: local
-
 services:
+  app:
+    build: .
+    volumes:
+      - ./:/workspace
+    working_dir: /workspace
+    ports:
+      - 3001:3001
+      - 3000:3000
+    depends_on:
+      - postgresql
+    init: true
+    command: bash -c "bun run start"
+    env_file:
+      - .env
+
   postgresql:
     image: postgres:16
     shm_size: 1g
@@ -15,17 +26,6 @@ services:
     env_file:
       - .env
 
-  app:
-    build: .
-    volumes:
-      - ./:/workspace
-    working_dir: /workspace
-    ports:
-      - 3001:3001
-      - 3000:3000
-    depends_on:
-      - postgresql
-    init: true
-    command: bash -c "bun run dev"
-    env_file:
-      - .env
+volumes:
+  postgres_data:
+    driver: local
