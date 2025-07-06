@@ -26,6 +26,7 @@ export const APP_CONSTANTS = {
 	SERVER_PORT: 3000,
 	GRAPHQL_PORT: 3001,
 	MAX_CONTRACTS_PER_REQUEST: 50,
+	CORS_ORIGINS: process.env.CORS_ORIGINS,
 	DB: {
 		HOST: process.env.POSTGRES_HOST || "localhost",
 		PORT: parseInt(process.env.POSTGRES_PORT || "5432"),
@@ -49,6 +50,36 @@ export async function getProjectName(): Promise<string> {
 	return cachedProjectName;
 }
 
+/**
+ * Parses CORS origins from environment variables.
+ * Expects a JSON array like ["*"] or ["http://localhost:3000", "https://yourdomain.com"]
+ */
+export function getCorsOrigins(): string[] {
+	if (!APP_CONSTANTS.CORS_ORIGINS) {
+		throw new Error(
+			'CORS_ORIGINS environment variable is required. Please set it to a JSON array like ["*"] or ["http://localhost:3000"]',
+		);
+	}
+
+	try {
+		const origins = JSON.parse(APP_CONSTANTS.CORS_ORIGINS);
+		if (!Array.isArray(origins)) {
+			throw new Error("CORS_ORIGINS must be a valid JSON array");
+		}
+		return origins;
+	} catch (error) {
+		if (
+			error instanceof Error &&
+			error.message.includes("CORS_ORIGINS must be")
+		) {
+			throw error;
+		}
+		throw new Error(
+			'CORS_ORIGINS must be a valid JSON array. Example: ["*"] or ["http://localhost:3000"]',
+		);
+	}
+}
+
 // Custom alphabet for generating unique indexer IDs
 const NANOID_ALPHABET = "_abcdefghijklmnopqrstuvwxyz";
 const NANOID_LENGTH = 10;
@@ -62,7 +93,10 @@ export function parseAbi(abi: ContractAbi | string): ContractAbi {
 }
 
 export function toSnakeCase(str: string): string {
-	return str.replace(/([A-Z])/g, '_$1').toLowerCase().replace(/^_/, '');
+	return str
+		.replace(/([A-Z])/g, "_$1")
+		.toLowerCase()
+		.replace(/^_/, "");
 }
 
 function isValidEthereumAddress(address: string): boolean {
@@ -186,6 +220,29 @@ export async function loadRindexerConfig(): Promise<{
 			throw new Error(
 				"PostgreSQL must be enabled in rindexer.yaml configuration",
 			);
+		}
+		// Validate that all network RPC endpoints are configured in environment variables
+		if (config.networks) {
+			const missingEndpoints: string[] = [];
+			
+			for (const network of config.networks) {
+				if (network.rpc) {
+					// Extract environment variable name from ${VAR_NAME} format
+					const envVarMatch = network.rpc.match(/^\$\{([^}]+)\}$/);
+					if (envVarMatch) {
+						const envVarName = envVarMatch[1];
+						if (!process.env[envVarName]) {
+							missingEndpoints.push(`${envVarName} (for network: ${network.name})`);
+						}
+					}
+				}
+			}
+
+			if (missingEndpoints.length > 0) {
+				throw new Error(
+					`Missing environment variables for network RPC endpoints:\n${missingEndpoints.map(endpoint => `  - ${endpoint}`).join('\n')}\n\nPlease add these to your .env file.`
+				);
+			}
 		}
 
 		return { projectName: config.name, config };

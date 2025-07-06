@@ -4,11 +4,7 @@
 	"service": "app",
 	"workspaceFolder": "/workspace",
 	"features": {
-		"ghcr.io/devcontainers/features/common-utils:2": {},
-		"ghcr.io/devcontainers/features/docker-outside-of-docker:1": {
-			"moby": false,
-			"dockerDashComposeVersion": "v2"
-		}
+		"ghcr.io/devcontainers/features/common-utils:2": {}
 	},
 	"customizations": {
 		"vscode": {
